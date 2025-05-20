@@ -141,14 +141,15 @@ io.on('connection', (socket) => {
 
     const winnerIndex = checkGameOver(game);
 
-    if (winnerIndex !== -1) {
-      game.gameOver = true;
+if (winnerIndex !== -1) {
+  game.gameOver = true;
 
-      io.to(playerRoom).emit('gameOver', {
-        winner: winnerIndex === playerIndex ? 'player' : 'enemy'
-      });
-      return;
-    }
+  io.to(playerRoom).emit('gameOver', {
+    winner: winnerIndex === playerIndex ? 'player' : 'enemy'
+  });
+
+  return;  // Bu return satırını kesinlikle koy, yoksa moveConfirmed vs. emit edilebilir ve karışıklık olur.
+}
 
     // Aktif oyuncuya hareket onayı
     socket.emit('moveConfirmed', {
