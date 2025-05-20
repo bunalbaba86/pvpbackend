@@ -199,6 +199,7 @@ io.on('connection', (socket) => {
       result
     });
   });
+socket.emit('enemyMove', { you: updatedYou, enemy: updatedEnemy, damage: 15 });
 
   socket.on('disconnect', () => {
     console.log(`Player disconnected: ${socket.id}`);
