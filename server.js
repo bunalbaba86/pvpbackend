@@ -14,7 +14,6 @@ const PORT = process.env.PORT || 3000;
 let waitingPlayer = null;
 const games = new Map(); // roomId -> gameState
 
-// Oyun başlangıç parametreleri
 function createNewGame(player1Id, player2Id) {
   return {
     players: [player1Id, player2Id],
@@ -28,7 +27,6 @@ function createNewGame(player1Id, player2Id) {
 }
 
 function canPerformMove(move, playerData) {
-  // Mana kontrolü
   switch(move) {
     case 'attack': return playerData.mana >= 10;
     case 'defend': return playerData.mana >= 5;
@@ -46,7 +44,7 @@ function applyMove(move, currentPlayerData, otherPlayerData) {
       break;
     case 'defend':
       currentPlayerData.mana -= 5;
-      currentPlayerData.health += 10; // Defend healing
+      currentPlayerData.health += 10;
       if (currentPlayerData.health > 100) currentPlayerData.health = 100;
       break;
     case 'skill':
@@ -63,13 +61,13 @@ function applyMove(move, currentPlayerData, otherPlayerData) {
 function checkGameOver(game) {
   if (game.playersData[0].health <= 0) {
     game.gameOver = true;
-    return 1; // player 1 lost, player 2 won (index 1)
+    return 1;
   }
   if (game.playersData[1].health <= 0) {
     game.gameOver = true;
-    return 0; // player 0 won
+    return 0;
   }
-  return -1; // oyun devam ediyor
+  return -1;
 }
 
 io.on('connection', (socket) => {
@@ -79,7 +77,6 @@ io.on('connection', (socket) => {
     waitingPlayer = socket.id;
     socket.emit('waitingForOpponent');
   } else {
-    // Yeni oyun başlat
     const roomId = waitingPlayer + '#' + socket.id;
     const game = createNewGame(waitingPlayer, socket.id);
     games.set(roomId, game);
@@ -87,7 +84,6 @@ io.on('connection', (socket) => {
     socket.join(roomId);
     io.sockets.sockets.get(waitingPlayer)?.join(roomId);
 
-    // Oyunculara bilgi gönder
     io.to(waitingPlayer).emit('gameStart', {
       yourIndex: 0,
       you: game.playersData[0],
@@ -100,17 +96,10 @@ io.on('connection', (socket) => {
       enemy: game.playersData[0]
     });
 
-    // Bekleyen oyuncu boşaltıldı
     waitingPlayer = null;
-
-    // Oyun odasında hareketleri dinle
-    io.in(roomId).on('playerMove', (data) => {
-      // Boş, oyunu başlatan taraf handle eder
-    });
   }
 
   socket.on('playerMove', ({ move }) => {
-    // Oyuncunun odasını bul
     let playerRoom = null;
     for (let room of socket.rooms) {
       if (room !== socket.id) {
@@ -145,14 +134,11 @@ io.on('connection', (socket) => {
 
     applyMove(move, currentPlayerData, otherPlayerData);
 
-    // Sağlık 0 altına inmesin
     if (currentPlayerData.health < 0) currentPlayerData.health = 0;
     if (otherPlayerData.health < 0) otherPlayerData.health = 0;
 
-    // Sıra değiştir
     game.turnIndex = 1 - game.turnIndex;
 
-    // Kazanan var mı?
     const winnerIndex = checkGameOver(game);
 
     if (winnerIndex !== -1) {
@@ -164,16 +150,13 @@ io.on('connection', (socket) => {
       return;
     }
 
-    // Güncel durumu oyunculara yolla
-    // Kendi oyuncusuna farklı, diğer oyuncuya ters yansıtacağız
-
-    // Aktif oyuncuya hareket onay mesajı
+    // Aktif oyuncuya hareket onayı
     socket.emit('moveConfirmed', {
       you: game.playersData[playerIndex],
       enemy: game.playersData[1 - playerIndex]
     });
 
-    // Diğer oyuncuya hamle bildirimi ve sıra geçişi
+    // Diğer oyuncuya hamle bildirimi
     const otherPlayerId = game.players[1 - playerIndex];
     io.to(otherPlayerId).emit('enemyMove', {
       you: game.playersData[1 - playerIndex],
@@ -184,17 +167,15 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {
     console.log(`Player disconnected: ${socket.id}`);
 
-    // Bekliyorsa bekleyen oyuncu sıfırlanır
     if (waitingPlayer === socket.id) waitingPlayer = null;
 
-    // Oyuncunun oyun odasını bul ve rakibine oyunun bittiğini bildir
     for (const [roomId, game] of games.entries()) {
       if (game.players.includes(socket.id)) {
         games.delete(roomId);
         const otherPlayerId = game.players.find(id => id !== socket.id);
         if (otherPlayerId) {
           io.to(otherPlayerId).emit('gameOver', {
-            winner: 'player' // Oyuncu rakip disconnect olunca kazandı sayılır
+            winner: 'player'
           });
         }
         break;
