@@ -70,6 +70,14 @@ function checkGameOver(game) {
   return -1;
 }
 
+io.on('connection', socket => {
+  socket.on('chatMessage', ({ message }) => {
+    // Mesajı aynı odadaki diğer oyuncuya gönder
+    socket.broadcast.emit('chatMessage', { message, fromIndex: socket.playerIndex });
+  });
+});
+
+
 io.on('connection', (socket) => {
   console.log(`Player connected: ${socket.id}`);
 
