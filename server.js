@@ -75,8 +75,6 @@ io.on('connection', socket => {
     // Mesajı aynı odadaki diğer oyuncuya gönder
     socket.broadcast.emit('chatMessage', { message, fromIndex: socket.playerIndex });
   });
-});
-
 
 io.on('connection', (socket) => {
   console.log(`Player connected: ${socket.id}`);
