@@ -5,189 +5,177 @@ const { Server } = require('socket.io');
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
-  cors: {
-    origin: "*",
-  }
+  cors: { origin: "*" }
 });
 
 const PORT = process.env.PORT || 10000;
 
-// Oda ve oyuncu yönetimi
 let waitingPlayer = null;
-let rooms = {}; // roomId: { players: [socket1, socket2], gameState: {...}, turn: 0 or 1 }
+let rooms = {};
 
 function createNewGame(player1, player2, roomId) {
-  // Rastgele güçler (örnek: health ve mana başlangıçları)
   const player1Data = {
     health: 100,
     mana: 50,
-    power: Math.floor(Math.random() * 20) + 10, // 10-30 arası rastgele güç
-    lastMoveTime: 0,
+    power: Math.floor(Math.random() * 20) + 10,
+    lastMoveTime: 0
   };
   const player2Data = {
     health: 100,
     mana: 50,
     power: Math.floor(Math.random() * 20) + 10,
-    lastMoveTime: 0,
+    lastMoveTime: 0
   };
 
   rooms[roomId] = {
     players: [player1, player2],
     gameState: [player1Data, player2Data],
-    turn: 0, // player1 başlar
+    turn: 0
   };
 
-  // Odaya sok
   player1.join(roomId);
   player2.join(roomId);
 
-  // Oyun başlangıcı bilgisi gönder
-  io.to(roomId).emit('gameStart', {
-    player: player1Data,
+  // Oyunculara kendi ID'sini ve rakibini gönder
+  player1.emit('gameStart', {
+    you: player1Data,
     enemy: player2Data,
+    yourIndex: 0
+  });
+
+  player2.emit('gameStart', {
+    you: player2Data,
+    enemy: player1Data,
+    yourIndex: 1
   });
 }
 
-function applyMove(playerState, enemyState, move) {
+function applyMove(player, enemy, move) {
   const now = Date.now();
-  if (now - playerState.lastMoveTime < 3000) {
-    return { success: false, error: 'Cooldown active, wait before next move.' };
+  if (now - player.lastMoveTime < 3000) {
+    return { success: false, error: 'Cooldown active. Wait a moment.' };
   }
 
   switch (move) {
     case 'attack':
-      if (playerState.mana < 10) return { success: false, error: 'Not enough mana for attack.' };
-      enemyState.health -= 10 + playerState.power;
-      playerState.mana -= 10;
+      if (player.mana < 10) return { success: false, error: 'Not enough mana.' };
+      enemy.health -= 10 + player.power;
+      player.mana -= 10;
       break;
 
     case 'defend':
-      if (playerState.mana < 5) return { success: false, error: 'Not enough mana for defend.' };
-      playerState.health += 5; // Defend ile biraz can kazan
-      if (playerState.health > 100) playerState.health = 100;
-      playerState.mana -= 5;
+      if (player.mana < 5) return { success: false, error: 'Not enough mana.' };
+      player.health = Math.min(player.health + 10, 100);
+      player.mana -= 5;
       break;
 
     case 'skill':
-      if (playerState.mana < 20) return { success: false, error: 'Not enough mana for skill.' };
-      enemyState.health -= 25 + playerState.power;
-      playerState.mana -= 20;
+      if (player.mana < 20) return { success: false, error: 'Not enough mana.' };
+      enemy.health -= 25 + player.power;
+      player.mana -= 20;
       break;
 
     case 'mana':
-      // Mana artışı
-      playerState.mana += 15;
-      if (playerState.mana > 50) playerState.mana = 50;
+      player.mana = Math.min(player.mana + 15, 50);
       break;
 
     default:
-      return { success: false, error: 'Unknown move.' };
+      return { success: false, error: 'Invalid move.' };
   }
 
-  if (enemyState.health < 0) enemyState.health = 0;
-  if (playerState.health < 0) playerState.health = 0;
-
-  playerState.lastMoveTime = now;
+  if (enemy.health < 0) enemy.health = 0;
+  if (player.health < 0) player.health = 0;
+  player.lastMoveTime = now;
   return { success: true };
 }
 
 io.on('connection', (socket) => {
-  console.log('A user connected:', socket.id);
+  console.log(`User connected: ${socket.id}`);
 
-  if (waitingPlayer === null) {
+  if (!waitingPlayer) {
     waitingPlayer = socket;
     socket.emit('waitingForOpponent');
   } else {
-    // Rakip bulundu, yeni oda oluştur
-    const roomId = `room-${socket.id}-${waitingPlayer.id}`;
+    const roomId = `room-${waitingPlayer.id}-${socket.id}`;
     createNewGame(waitingPlayer, socket, roomId);
     waitingPlayer = null;
   }
 
-  socket.on('playerMove', (data) => {
-    // Hangi odada, hangi oyuncu?
-    const roomsOfSocket = Array.from(socket.rooms).filter(r => r !== socket.id);
-    if (roomsOfSocket.length === 0) {
-      socket.emit('errorMessage', 'You are not in a game room.');
-      return;
-    }
-    const roomId = roomsOfSocket[0];
+  socket.on('playerMove', ({ move }) => {
+    const roomId = Array.from(socket.rooms).find(r => r !== socket.id);
     const room = rooms[roomId];
-    if (!room) {
-      socket.emit('errorMessage', 'Game room not found.');
-      return;
-    }
+    if (!room) return;
 
     const playerIndex = room.players.indexOf(socket);
-    if (playerIndex === -1) {
-      socket.emit('errorMessage', 'You are not a player in this room.');
-      return;
-    }
+    const enemyIndex = playerIndex === 0 ? 1 : 0;
 
     if (room.turn !== playerIndex) {
-      socket.emit('errorMessage', 'Not your turn.');
+      socket.emit('errorMessage', 'Not your turn!');
       return;
     }
 
-    const playerState = room.gameState[playerIndex];
-    const enemyIndex = playerIndex === 0 ? 1 : 0;
-    const enemyState = room.gameState[enemyIndex];
+    const player = room.gameState[playerIndex];
+    const enemy = room.gameState[enemyIndex];
 
-    // Hamleyi uygula
-    const result = applyMove(playerState, enemyState, data.move);
-
+    const result = applyMove(player, enemy, move);
     if (!result.success) {
       socket.emit('errorMessage', result.error);
       return;
     }
 
-    // Hamle başarılıysa
-    // Oyun sonu kontrolü
-    if (enemyState.health <= 0) {
-      io.to(roomId).emit('gameOver', { winner: 'player' });
-      delete rooms[roomId];
-      return;
-    }
-    if (playerState.health <= 0) {
-      io.to(roomId).emit('gameOver', { winner: 'enemy' });
+    // Kazanma kontrolü
+    if (enemy.health <= 0) {
+      room.players[playerIndex].emit('gameOver', { winner: true });
+      room.players[enemyIndex].emit('gameOver', { winner: false });
       delete rooms[roomId];
       return;
     }
 
-    // Hamle onayı ve durum güncelleme
-    socket.emit('moveConfirmed', {
-      player: playerState,
-      enemy: enemyState,
-    });
+    if (player.health <= 0) {
+      room.players[playerIndex].emit('gameOver', { winner: false });
+      room.players[enemyIndex].emit('gameOver', { winner: true });
+      delete rooms[roomId];
+      return;
+    }
 
-    // Rakibe hamleyi gönder
-    room.players[enemyIndex].emit('enemyMove', {
-      move: data.move,
-      player: enemyState,
-      enemy: playerState,
-    });
-
-    // Sıra diğer oyuncuya geçsin
+    // Sıra değiştir ve oyuncuları bilgilendir
     room.turn = enemyIndex;
+
+    room.players[playerIndex].emit('moveConfirmed', {
+      you: player,
+      enemy: enemy
+    });
+
+    room.players[enemyIndex].emit('enemyMove', {
+      move,
+      you: enemy,
+      enemy: player
+    });
   });
 
   socket.on('disconnect', () => {
-    console.log('User disconnected:', socket.id);
-    // Oyuncu disconnect olunca odadan çıkar ve rakip kazanır
+    console.log(`Disconnected: ${socket.id}`);
+
+    if (waitingPlayer === socket) {
+      waitingPlayer = null;
+      return;
+    }
+
+    // Odayı bul ve rakibe bildir
     for (const roomId in rooms) {
       const room = rooms[roomId];
       if (room.players.includes(socket)) {
-        const otherPlayer = room.players.find(p => p !== socket);
-        if (otherPlayer) {
-          otherPlayer.emit('gameOver', { winner: 'player' });
+        const enemy = room.players.find(s => s !== socket);
+        if (enemy) {
+          enemy.emit('gameOver', { winner: true, reason: 'opponent_disconnected' });
         }
         delete rooms[roomId];
+        break;
       }
     }
-    if (waitingPlayer === socket) waitingPlayer = null;
   });
 });
 
 server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`✅ Server running on port ${PORT}`);
 });
