@@ -27,17 +27,17 @@ function createNewGame(player1Id, player2Id) {
 }
 
 function canPerformMove(move, playerData) {
-  switch(move) {
+  switch (move) {
     case 'attack': return playerData.mana >= 10;
     case 'defend': return playerData.mana >= 5;
-    case 'skill':  return playerData.mana >= 20;
-    case 'mana':   return true;
+    case 'skill': return playerData.mana >= 20;
+    case 'mana': return true;
     default: return false;
   }
 }
 
 function applyMove(move, currentPlayerData, otherPlayerData) {
-  switch(move) {
+  switch (move) {
     case 'attack':
       currentPlayerData.mana -= 10;
       otherPlayerData.health -= 15;
@@ -70,15 +70,14 @@ function checkGameOver(game) {
   return -1;
 }
 
-io.on('connection', socket => {
-  socket.on('chatMessage', ({ message }) => {
-    // Mesajı aynı odadaki diğer oyuncuya gönder
-    socket.broadcast.emit('chatMessage', { message, fromIndex: socket.playerIndex });
-  });
-
 io.on('connection', (socket) => {
   console.log(`Player connected: ${socket.id}`);
 
+  // Oyuncuya özel bilgileri saklamak için:
+  socket.playerIndex = null;
+  socket.roomId = null;
+
+  // Rakip bekleme sistemi
   if (waitingPlayer === null) {
     waitingPlayer = socket.id;
     socket.emit('waitingForOpponent');
@@ -87,16 +86,24 @@ io.on('connection', (socket) => {
     const game = createNewGame(waitingPlayer, socket.id);
     games.set(roomId, game);
 
-    socket.join(roomId);
-    io.sockets.sockets.get(waitingPlayer)?.join(roomId);
+    const player1Socket = io.sockets.sockets.get(waitingPlayer);
+    const player2Socket = socket;
 
-    io.to(waitingPlayer).emit('gameStart', {
+    player1Socket.join(roomId);
+    player2Socket.join(roomId);
+
+    player1Socket.playerIndex = 0;
+    player1Socket.roomId = roomId;
+    player2Socket.playerIndex = 1;
+    player2Socket.roomId = roomId;
+
+    player1Socket.emit('gameStart', {
       yourIndex: 0,
       you: game.playersData[0],
       enemy: game.playersData[1]
     });
 
-    io.to(socket.id).emit('gameStart', {
+    player2Socket.emit('gameStart', {
       yourIndex: 1,
       you: game.playersData[1],
       enemy: game.playersData[0]
@@ -105,26 +112,29 @@ io.on('connection', (socket) => {
     waitingPlayer = null;
   }
 
+  socket.on('chatMessage', ({ message }) => {
+    if (!socket.roomId || socket.playerIndex === null) return;
+    socket.to(socket.roomId).emit('chatMessage', {
+      message,
+      fromIndex: socket.playerIndex
+    });
+  });
+
   socket.on('playerMove', ({ move }) => {
-    let playerRoom = null;
-    for (let room of socket.rooms) {
-      if (room !== socket.id) {
-        playerRoom = room;
-        break;
-      }
-    }
-    if (!playerRoom) {
+    const roomId = socket.roomId;
+    const playerIndex = socket.playerIndex;
+
+    if (!roomId || playerIndex === null) {
       socket.emit('errorMessage', 'You are not in a game room.');
       return;
     }
 
-    const game = games.get(playerRoom);
+    const game = games.get(roomId);
     if (!game || game.gameOver) {
       socket.emit('errorMessage', 'Game is not active.');
       return;
     }
 
-    const playerIndex = game.players.indexOf(socket.id);
     if (playerIndex !== game.turnIndex) {
       socket.emit('errorMessage', 'Not your turn.');
       return;
@@ -140,52 +150,52 @@ io.on('connection', (socket) => {
 
     applyMove(move, currentPlayerData, otherPlayerData);
 
-    if (currentPlayerData.health < 0) currentPlayerData.health = 0;
-    if (otherPlayerData.health < 0) otherPlayerData.health = 0;
-
-    game.turnIndex = 1 - game.turnIndex;
+    currentPlayerData.health = Math.max(0, currentPlayerData.health);
+    otherPlayerData.health = Math.max(0, otherPlayerData.health);
 
     const winnerIndex = checkGameOver(game);
 
-if (winnerIndex !== -1) {
-  game.gameOver = true;
+    if (winnerIndex !== -1) {
+      io.to(roomId).emit('gameOver', {
+        winner: winnerIndex === playerIndex ? 'player' : 'enemy'
+      });
+      games.delete(roomId);
+      return;
+    }
 
-  io.to(playerRoom).emit('gameOver', {
-    winner: winnerIndex === playerIndex ? 'player' : 'enemy'
-  });
+    // Sırayı değiştir
+    game.turnIndex = 1 - game.turnIndex;
 
-  return;  // Bu return satırını kesinlikle koy, yoksa moveConfirmed vs. emit edilebilir ve karışıklık olur.
-}
-
-    // Aktif oyuncuya hareket onayı
+    // Aktif oyuncuya onay
     socket.emit('moveConfirmed', {
-      you: game.playersData[playerIndex],
-      enemy: game.playersData[1 - playerIndex]
+      you: currentPlayerData,
+      enemy: otherPlayerData
     });
 
-    // Diğer oyuncuya hamle bildirimi
+    // Diğer oyuncuya bilgi
     const otherPlayerId = game.players[1 - playerIndex];
     io.to(otherPlayerId).emit('enemyMove', {
-      you: game.playersData[1 - playerIndex],
-      enemy: game.playersData[playerIndex]
+      you: otherPlayerData,
+      enemy: currentPlayerData
     });
   });
 
   socket.on('disconnect', () => {
     console.log(`Player disconnected: ${socket.id}`);
 
-    if (waitingPlayer === socket.id) waitingPlayer = null;
+    if (waitingPlayer === socket.id) {
+      waitingPlayer = null;
+    }
 
-    for (const [roomId, game] of games.entries()) {
-      if (game.players.includes(socket.id)) {
-        games.delete(roomId);
-        const otherPlayerId = game.players.find(id => id !== socket.id);
-        if (otherPlayerId) {
-          io.to(otherPlayerId).emit('gameOver', {
-            winner: 'player'
-          });
-        }
-        break;
+    const roomId = socket.roomId;
+    if (roomId && games.has(roomId)) {
+      const game = games.get(roomId);
+      games.delete(roomId);
+      const otherPlayerId = game.players.find(id => id !== socket.id);
+      if (otherPlayerId) {
+        io.to(otherPlayerId).emit('gameOver', {
+          winner: 'player'
+        });
       }
     }
   });
