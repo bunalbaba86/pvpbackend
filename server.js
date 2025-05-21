@@ -10,16 +10,17 @@ const io = new Server(server, {
 
 const PORT = process.env.PORT || 3000;
 
+// Oyun odaları
 let waitingPlayer = null;
 const games = new Map(); // roomId -> gameState
 
 function createNewGame(player1Id, player2Id) {
   return {
     players: [player1Id, player2Id],
-    turnIndex: 0,
+    turnIndex: 0, // 0 veya 1
     playersData: [
-      { health: 100, mana: 50, defend: false },
-      { health: 100, mana: 50, defend: false }
+      { health: 100, mana: 50 },
+      { health: 100, mana: 50 }
     ],
     gameOver: false
   };
@@ -35,52 +36,50 @@ function canPerformMove(move, playerData) {
   }
 }
 
-function getRandom(min, max) {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
-}
+function applyMove(move, currentPlayerData, otherPlayerData, game, playerIndex) {
+  let damage = 0;
+  let critical = false;
 
-function applyMove(move, currentPlayerData, otherPlayerData) {
-  let result = { move, damage: 0, heal: 0, manaGain: 0 };
-
-  switch (move) {
-    case 'attack': {
-      currentPlayerData.mana -= 10;
-      const baseDamage = getRandom(10, 20);
-      const damage = otherPlayerData.defend ? Math.floor(baseDamage / 2) : baseDamage;
-      otherPlayerData.health -= damage;
-      otherPlayerData.defend = false;
-      result.damage = damage;
-      break;
+  function tryCrit(base) {
+    if (Math.random() < 0.2) {
+      critical = true;
+      return base * 2;
     }
-    case 'defend': {
-      currentPlayerData.mana -= 5;
-      currentPlayerData.defend = true;
-      result.damage = 0;
-      break;
-    }
-    case 'skill': {
-      currentPlayerData.mana -= 20;
-      const baseDamage = getRandom(25, 40);
-      const damage = otherPlayerData.defend ? Math.floor(baseDamage / 2) : baseDamage;
-      otherPlayerData.health -= damage;
-      otherPlayerData.defend = false;
-      result.damage = damage;
-      break;
-    }
-    case 'mana': {
-      const manaGain = getRandom(10, 20);
-      currentPlayerData.mana += manaGain;
-      if (currentPlayerData.mana > 50) currentPlayerData.mana = 50;
-      result.manaGain = manaGain;
-      break;
-    }
+    return base;
   }
 
-  currentPlayerData.mana = Math.max(0, currentPlayerData.mana);
-  currentPlayerData.health = Math.min(100, currentPlayerData.health);
-  otherPlayerData.health = Math.max(0, otherPlayerData.health);
+  switch (move) {
+    case 'attack':
+      currentPlayerData.mana -= 10;
+      damage = tryCrit(15);
+      otherPlayerData.health -= damage;
+      break;
+    case 'defend':
+      currentPlayerData.mana -= 5;
+      currentPlayerData.health += 10;
+      if (currentPlayerData.health > 100) currentPlayerData.health = 100;
+      break;
+    case 'skill':
+      currentPlayerData.mana -= 20;
+      damage = tryCrit(30);
+      otherPlayerData.health -= damage;
+      break;
+    case 'mana':
+      currentPlayerData.mana += 15;
+      if (currentPlayerData.mana > 50) currentPlayerData.mana = 50;
+      break;
+    case 'hydra':
+      currentPlayerData.mana -= 25;
+      if (!game.hydra) game.hydra = [0, 0];
+      game.hydra[1 - playerIndex] = 4;
+      break;
+  }
 
-  return result;
+  if (damage > 0) {
+    otherPlayerData.health -= damage;
+  }
+
+  return { damage, critical };
 }
 
 function checkGameOver(game) {
@@ -97,9 +96,12 @@ function checkGameOver(game) {
 
 io.on('connection', (socket) => {
   console.log(`Player connected: ${socket.id}`);
+
+  // Oyuncuya özel bilgileri saklamak için:
   socket.playerIndex = null;
   socket.roomId = null;
 
+  // Rakip bekleme sistemi
   if (waitingPlayer === null) {
     waitingPlayer = socket.id;
     socket.emit('waitingForOpponent');
@@ -170,9 +172,13 @@ io.on('connection', (socket) => {
       return;
     }
 
-    const result = applyMove(move, currentPlayerData, otherPlayerData);
+    const result = applyMove(move, currentPlayerData, otherPlayerData, game, playerIndex);
+
+    currentPlayerData.health = Math.max(0, currentPlayerData.health);
+    otherPlayerData.health = Math.max(0, otherPlayerData.health);
 
     const winnerIndex = checkGameOver(game);
+
     if (winnerIndex !== -1) {
       io.to(roomId).emit('gameOver', {
         winner: winnerIndex === playerIndex ? 'player' : 'enemy'
@@ -181,22 +187,34 @@ io.on('connection', (socket) => {
       return;
     }
 
-    // +5 mana her tur başında
-    game.playersData[1 - playerIndex].mana = Math.min(50, game.playersData[1 - playerIndex].mana + 5);
-
+    // Sırayı değiştir
     game.turnIndex = 1 - game.turnIndex;
 
+    
+    // HYDRA etkisi uygula
+    if (game.hydra && game.hydra[playerIndex] > 0) {
+      game.hydra[playerIndex]--;
+      currentPlayerData.health -= 10;
+      if (currentPlayerData.health < 0) currentPlayerData.health = 0;
+    }
+
+    // Aktif oyuncuya onay
     socket.emit('moveConfirmed', {
       you: currentPlayerData,
       enemy: otherPlayerData,
-      result
+      damage: result.damage,
+      move,
+      critical: result.critical
     });
 
+    // Diğer oyuncuya bilgi
     const otherPlayerId = game.players[1 - playerIndex];
     io.to(otherPlayerId).emit('enemyMove', {
       you: otherPlayerData,
       enemy: currentPlayerData,
-      result
+      damage: result.damage,
+      move,
+      critical: result.critical
     });
   });
 
