@@ -23,15 +23,19 @@ const playerToGame = new Map(); // oyuncuId -> odaId
 
 // Yeni oyun oluşturan yardımcı fonksiyon
 function createNewGame(player1Id, player2Id) {
+  // Rastgele sağlık değeri belirle (200-250 arası)
+  const initialHealth = Math.floor(Math.random() * 51) + 200;
+  
   return {
     players: [player1Id, player2Id],
     turnIndex: 0, // İlk oyuncu sırası
     playersData: [
-      { health: 100, mana: 50 }, // İlk oyuncu
-      { health: 100, mana: 50 }  // İkinci oyuncu
+      { health: initialHealth, mana: 100, hydraActive: 0, hydraUsed: false }, // İlk oyuncu
+      { health: initialHealth, mana: 100, hydraActive: 0, hydraUsed: false }  // İkinci oyuncu
     ],
     gameOver: false,
-    winner: null
+    winner: null,
+    initialHealth: initialHealth // Başlangıç sağlık değerini kaydet
   };
 }
 
@@ -42,6 +46,7 @@ function canPerformMove(move, playerData) {
     case 'defend': return playerData.mana >= 5;
     case 'skill': return playerData.mana >= 20;
     case 'mana': return true;
+    case 'hydra': return playerData.mana >= 30 && !playerData.hydraUsed;
     default: return false;
   }
 }
@@ -64,8 +69,20 @@ function applyMove(move, currentPlayerData, otherPlayerData) {
       break;
     case 'mana':
       currentPlayerData.mana += 15;
-      if (currentPlayerData.mana > 50) currentPlayerData.mana = 50;
+      if (currentPlayerData.mana > 100) currentPlayerData.mana = 100;
       break;
+    case 'hydra':
+      currentPlayerData.mana -= 30;
+      otherPlayerData.health -= 10; // İlk etki
+      currentPlayerData.hydraActive = 3; // 3 tur daha etkili olacak
+      currentPlayerData.hydraUsed = true; // Bir oyunda bir kez kullanılabilir
+      break;
+  }
+  
+  // HYDRA etkisi devam ediyor mu? (sıra değişmeden önce uygula)
+  if (currentPlayerData.hydraActive > 0) {
+    otherPlayerData.health -= 8; // Her turda 8 hasar
+    currentPlayerData.hydraActive -= 1;
   }
 }
 
@@ -149,17 +166,30 @@ io.on('connection', (socket) => {
         playerToGame.set(waitingPlayer, roomId);
         playerToGame.set(socket.id, roomId);
         
+        // Rastgele profil fotoğrafları seç
+        const playerAvatars = ['you.jpg', 'you2.jpg', 'you3.jpg'];
+        const enemyAvatars = ['enemy.jpg', 'enemy2.jpg', 'enemy3.jpg'];
+        
+        const playerAvatarIndex = Math.floor(Math.random() * playerAvatars.length);
+        const enemyAvatarIndex = Math.floor(Math.random() * enemyAvatars.length);
+        
         // Her iki oyuncuya da oyun başladı bildirimi gönder
         io.to(waitingPlayer).emit('gameStart', {
           yourIndex: 0,
           you: game.playersData[0],
-          enemy: game.playersData[1]
+          enemy: game.playersData[1],
+          initialHealth: game.initialHealth,
+          playerAvatar: playerAvatars[playerAvatarIndex],
+          enemyAvatar: enemyAvatars[enemyAvatarIndex]
         });
         
         io.to(socket.id).emit('gameStart', {
           yourIndex: 1,
           you: game.playersData[1],
-          enemy: game.playersData[0]
+          enemy: game.playersData[0],
+          initialHealth: game.initialHealth,
+          playerAvatar: enemyAvatars[enemyAvatarIndex], // Diğer oyuncunun düşmanı, bu oyuncunun kendisi
+          enemyAvatar: playerAvatars[playerAvatarIndex]  // Diğer oyuncunun kendisi, bu oyuncunun düşmanı
         });
         
         // Bekleyen oyuncuyu temizle
@@ -239,9 +269,12 @@ io.on('connection', (socket) => {
   socket.on('chatMessage', ({ message }) => {
     if (!socket.roomId || socket.playerIndex === null) return;
     
+    // Mesaj uzunluğunu kontrol et (max 20 karakter)
+    const trimmedMessage = message.substring(0, 20);
+    
     // Mesajı diğer oyuncuya ilet
     socket.to(socket.roomId).emit('chatMessage', {
-      message,
+      message: trimmedMessage,
       fromIndex: socket.playerIndex
     });
   });
