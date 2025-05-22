@@ -1,4 +1,4 @@
-﻿// Basit istemci tarafı kimlik doğrulama işlemleri
+// Basit istemci tarafı kimlik doğrulama işlemleri
 
 // Kullanıcı kaydı fonksiyonu
 function registerUser(username, password) {
