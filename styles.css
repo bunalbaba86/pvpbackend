@@ -1,0 +1,187 @@
+﻿/* General Styles */
+body {
+    font-family: Arial, sans-serif;
+    background: #222;
+    color: #eee;
+    text-align: center;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    justify-content: center;
+    min-height: 100vh;
+}
+
+.container {
+    max-width: 900px;
+    background: #333;
+    border-radius: 10px;
+    overflow: hidden;
+    margin: 20px;
+    width: 100%;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+}
+
+/* Header */
+.game-header {
+    background: #444;
+    padding: 20px;
+    border-bottom: 2px solid #555;
+}
+
+.game-header h1 {
+    margin: 0;
+    color: #3498db;
+    text-shadow: 1px 1px 3px rgba(0, 0, 0, 0.5);
+}
+
+/* Menu */
+.menu-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 30px;
+    gap: 15px;
+}
+
+.menu-button {
+    background: #3498db;
+    color: white;
+    border: none;
+    padding: 12px 25px;
+    font-size: 16px;
+    border-radius: 5px;
+    cursor: pointer;
+    text-decoration: none;
+    width: 200px;
+    transition: all 0.3s ease;
+}
+
+.menu-button:hover {
+    background: #2980b9;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+}
+
+.play-button {
+    background: #2ecc71;
+}
+
+.play-button:hover {
+    background: #27ae60;
+}
+
+.logout-button {
+    background: #e74c3c;
+}
+
+.logout-button:hover {
+    background: #c0392b;
+}
+
+/* Forms */
+.form-container {
+    max-width: 400px;
+    margin: 0 auto;
+    padding: 20px;
+}
+
+.input-group {
+    margin-bottom: 20px;
+    text-align: left;
+}
+
+.input-group label {
+    display: block;
+    margin-bottom: 8px;
+    font-weight: bold;
+    color: #3498db;
+}
+
+.input-group input {
+    width: 100%;
+    padding: 10px;
+    border: 1px solid #555;
+    border-radius: 4px;
+    background: #444;
+    color: #fff;
+    font-size: 16px;
+}
+
+.form-button {
+    background: #3498db;
+    color: white;
+    border: none;
+    padding: 12px 25px;
+    font-size: 16px;
+    border-radius: 5px;
+    cursor: pointer;
+    width: 100%;
+    margin-top: 10px;
+    transition: background 0.3s ease;
+}
+
+.form-button:hover {
+    background: #2980b9;
+}
+
+.error-message {
+    color: #e74c3c;
+    margin: 10px 0;
+    min-height: 20px;
+}
+
+.form-footer {
+    margin-top: 20px;
+    font-size: 14px;
+}
+
+.form-footer a {
+    color: #3498db;
+    text-decoration: none;
+}
+
+.form-footer a:hover {
+    text-decoration: underline;
+}
+
+/* Game Info */
+.game-info {
+    background: #444;
+    margin: 20px;
+    padding: 20px;
+    border-radius: 8px;
+    text-align: left;
+}
+
+.game-info h2 {
+    color: #3498db;
+    margin-top: 0;
+}
+
+.game-info ul {
+    margin-left: 20px;
+}
+
+.game-info li {
+    margin-bottom: 8px;
+}
+
+/* Welcome Message */
+.welcome-message {
+    margin-top: 10px;
+    font-size: 16px;
+    color: #2ecc71;
+}
+
+/* Player Names */
+.player-name {
+    font-weight: bold;
+    color: #3498db;
+    margin-bottom: 5px;
+}
+
+.enemy-name {
+    font-weight: bold;
+    color: #e74c3c;
+    margin-bottom: 5px;
+}
