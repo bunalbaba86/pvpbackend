@@ -222,14 +222,14 @@ io.on('connection', (socket) => {
         
         // Random profile pics
         const playerAvatars = [
-          'https://cdn.jsdelivr.net/npm/feather-icons/dist/icons/user.svg',
-          'https://cdn.jsdelivr.net/npm/feather-icons/dist/icons/smile.svg',
-          'https://cdn.jsdelivr.net/npm/feather-icons/dist/icons/star.svg'
+          'you.jpg',
+          'you1.jpg',
+          'you2.jpg'
         ];
         const enemyAvatars = [
-          'https://cdn.jsdelivr.net/npm/feather-icons/dist/icons/target.svg',
-          'https://cdn.jsdelivr.net/npm/feather-icons/dist/icons/frown.svg',
-          'https://cdn.jsdelivr.net/npm/feather-icons/dist/icons/skull.svg'
+          'enemy.jpg',
+          'enemy2.jpg',
+          'enemy3.jpg'
         ];
         
         const playerAvatarIndex = Math.floor(Math.random() * playerAvatars.length);
