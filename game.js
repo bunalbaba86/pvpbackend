@@ -1,5 +1,5 @@
-﻿// Check if user is logged in, if not redirect to login page
-if (!requireLogin()) {
+// Check if user is logged in, if not redirect to login page
+if (!isLoggedIn()) {
   window.location.href = 'login.html';
 }
 
@@ -7,7 +7,106 @@ if (!requireLogin()) {
 const currentUser = getCurrentUser();
 
 // Socket.io connection
-const socket = io("https://pvpbackend.onrender.com");
+let socket;
+let useLocalMode = false;
+let localGameInstance = null;
+
+// Try to connect to the backend server first
+try {
+  // Use the custom domain for backend connection
+  socket = io("https://backend.yourgame.com", {
+    withCredentials: true,
+    timeout: 5000, // 5 second timeout
+  });
+  
+  // Handle connection errors
+  socket.on('connect_error', function(err) {
+    console.log('Connection error:', err);
+    switchToLocalMode();
+  });
+  
+  socket.on('connect_timeout', function() {
+    console.log('Connection timeout');
+    switchToLocalMode();
+  });
+  
+  // Switch to local mode if connection not established within 5 seconds
+  setTimeout(function() {
+    if (!socket.connected) {
+      console.log('Timeout: Connection not established in 5 seconds');
+      switchToLocalMode();
+    }
+  }, 5000);
+} catch (e) {
+  console.log('Error setting up Socket.io connection:', e);
+  switchToLocalMode();
+}
+
+// Function to switch to local mode
+function switchToLocalMode() {
+  if (useLocalMode) return; // Already in local mode
+  
+  useLocalMode = true;
+  console.log('Switching to local mode...');
+  
+  // Load local game simulation
+  const script = document.createElement('script');
+  script.src = 'local_game.js';
+  script.onload = function() {
+    if (currentUser) {
+      const username = currentUser.username || 'Player';
+      localGameInstance = window.createLocalGame(username);
+      
+      // Set up local game event handlers
+      setupLocalGameEvents(localGameInstance);
+      
+      console.log('Local game simulation started');
+    }
+  };
+  document.body.appendChild(script);
+}
+
+// Set up local game event listeners
+function setupLocalGameEvents(game) {
+  game.on('waitingForOpponent', function(data) {
+    handleWaitingForOpponent();
+  });
+  
+  game.on('gameStart', function(data) {
+    handleGameStart(data);
+  });
+  
+  game.on('moveConfirmed', function(data) {
+    handleMoveConfirmed(data);
+  });
+  
+  game.on('enemyMove', function(data) {
+    handleEnemyMove(data);
+  });
+  
+  game.on('gameOver', function(data) {
+    handleGameOver(data);
+  });
+  
+  game.on('chatMessage', function(data) {
+    handleChatMessage(data);
+  });
+}
+
+// Function to emit events either to socket.io or local game
+function emitEvent(event, data) {
+  if (useLocalMode && localGameInstance) {
+    if (event === 'move') {
+      localGameInstance.move(data);
+    } else if (event === 'joinGame') {
+      // Already started in local mode
+    } else if (event === 'chatMessage') {
+      localGameInstance.chatMessage(data.message);
+    }
+  } else if (socket && socket.connected) {
+    socket.emit(event, data);
+  }
+}
 
 // Game elements
 const youHealthBar = document.getElementById('you-health');
@@ -176,211 +275,239 @@ function addChatMessage(message, sender) {
   chatMessages.scrollTop = chatMessages.scrollHeight;
 }
 
-// Initialize game
-function initGame() {
-  // Connect to server
-  socket.on('connect', () => {
-    console.log('Connected to server');
-    
-    // Join game queue
-    socket.emit('playerMove', { 
-      move: 'join',
-      username: currentUser.username
-    });
-  });
+// Event handler functions
+function handleConnect() {
+  console.log('Connected to server');
   
-  // Waiting for opponent
-  socket.on('waitingForOpponent', () => {
-    setStatus('Waiting for an opponent...');
-    addChatMessage('Waiting for an opponent to join...', 'system');
-  });
+  // Join game queue
+  emitEvent('joinGame', { username: currentUser.username });
   
-  // Game start
-  socket.on('gameStart', (data) => {
-    yourIndex = data.yourIndex;
-    yourData = data.you;
-    enemyData = data.enemy;
-    initialHealth = data.initialHealth;
-    enemyName = data.enemyUsername || "Enemy";
-    
-    // Update UI with opponent name
-    enemyUsername.textContent = enemyName;
-    
-    // Set avatars
-    if (data.playerAvatar) {
-      playerAvatar.src = data.playerAvatar;
-    }
-    if (data.enemyAvatar) {
-      enemyAvatar.src = data.enemyAvatar;
-    }
-    
-    yourTurn = yourIndex === 0; // First player starts
-    gameActive = true;
-    
-    updateBars();
-    updateButtonStatus();
-    
-    if (yourTurn) {
-      setStatus('Your turn');
-    } else {
-      setStatus('Enemy turn');
-    }
-    
-    // System messages
-    addChatMessage('Game started!', 'system');
-    addChatMessage(`You are playing against ${enemyName}`, 'system');
-    
-    if (yourTurn) {
-      addChatMessage('Your turn first', 'system');
-    } else {
-      addChatMessage('Enemy goes first', 'system');
-    }
-  });
-  
-  // Move confirmed
-  socket.on('moveConfirmed', (data) => {
-    yourData = data.you;
-    enemyData = data.enemy;
-    yourTurn = false;
-    
-    // Show animations based on move type
-    if (data.move === 'attack' || data.move === 'skill' || data.move === 'hydra') {
-      let damage = 0;
-      if (data.move === 'attack') damage = 15;
-      else if (data.move === 'skill') damage = 30;
-      else if (data.move === 'hydra') damage = 10;
-      
-      showDamageNumber(document.getElementById('enemy'), damage, 'damage');
-    } else if (data.move === 'defend') {
-      showDamageNumber(document.getElementById('you'), 10, 'heal');
-    } else if (data.move === 'mana') {
-      showDamageNumber(document.getElementById('you'), 15, 'mana');
-    }
-    
-    updateBars();
-    updateButtonStatus();
-    setStatus('Enemy turn');
-    
-    // Add chat message
-    addChatMessage(`You used ${data.move}`, 'system');
-  });
-  
-  // Enemy move
-  socket.on('enemyMove', (data) => {
-    yourData = data.you;
-    enemyData = data.enemy;
-    yourTurn = true;
-    
-    // Show animations based on enemy move
-    if (data.move === 'attack' || data.move === 'skill' || data.move === 'hydra') {
-      let damage = 0;
-      if (data.move === 'attack') damage = 15;
-      else if (data.move === 'skill') damage = 30;
-      else if (data.move === 'hydra') damage = 10;
-      
-      showDamageNumber(document.getElementById('you'), damage, 'damage');
-    } else if (data.move === 'defend') {
-      showDamageNumber(document.getElementById('enemy'), 10, 'heal');
-    } else if (data.move === 'mana') {
-      showDamageNumber(document.getElementById('enemy'), 15, 'mana');
-    }
-    
-    updateBars();
-    updateButtonStatus();
-    setStatus('Your turn');
-    
-    // Add chat message
-    addChatMessage(`Enemy used ${data.move}`, 'system');
-  });
-  
-  // Game over
-  socket.on('gameOver', (data) => {
-    endGame();
-    
-    if (data.winner === 'player') {
-      victoryMessage.textContent = 'Victory!';
-      victoryMessage.style.color = '#2ecc71';
-      addChatMessage('You won!', 'system');
-    } else {
-      victoryMessage.textContent = 'Defeat!';
-      victoryMessage.style.color = '#e74c3c';
-      addChatMessage('You lost!', 'system');
-    }
-    
-    victoryMessage.style.display = 'block';
-    backToMenuBtn.style.display = 'block';
-    playAgainBtn.style.display = 'block';
-  });
-  
-  // Error message
-  socket.on('errorMessage', (data) => {
-    console.error('Server error:', data);
-    addChatMessage(`Error: ${data}`, 'system');
-  });
-  
-  // Chat message received
-  socket.on('chatMessage', (data) => {
-    addChatMessage(data.message, 'enemy');
-  });
-  
-  // Set up game controls
-  attackBtn.addEventListener('click', () => {
-    socket.emit('playerMove', { move: 'attack' });
-  });
-  
-  defendBtn.addEventListener('click', () => {
-    socket.emit('playerMove', { move: 'defend' });
-  });
-  
-  skillBtn.addEventListener('click', () => {
-    socket.emit('playerMove', { move: 'skill' });
-  });
-  
-  manaBtn.addEventListener('click', () => {
-    socket.emit('playerMove', { move: 'mana' });
-  });
-  
-  hydraBtn.addEventListener('click', () => {
-    socket.emit('playerMove', { move: 'hydra' });
-  });
-  
-  // Handle chat input
-  chatInput.addEventListener('input', () => {
-    const currentLength = chatInput.value.length;
-    charCount.textContent = `${currentLength}/20`;
-    
-    // Enable/disable send button
-    chatSendBtn.disabled = currentLength === 0;
-  });
-  
-  chatSendBtn.addEventListener('click', sendChatMessage);
-  
-  chatInput.addEventListener('keypress', (e) => {
-    if (e.key === 'Enter') {
-      sendChatMessage();
-    }
-  });
-  
-  function sendChatMessage() {
-    const message = chatInput.value.trim();
-    if (message) {
-      socket.emit('chatMessage', { message });
-      addChatMessage(message, 'you');
-      chatInput.value = '';
-      charCount.textContent = '0/20';
-      chatSendBtn.disabled = true;
-    }
-  }
-  
-  // Game end buttons
-  backToMenuBtn.addEventListener('click', () => {
-    window.location.href = 'pve.html'; // Redirect to pve.html as requested
-  });
-  
-  playAgainBtn.addEventListener('click', () => {
-    window.location.reload(); // Reload the page to start a new game
-  });
+  setStatus('Waiting for an opponent...');
 }
 
-// Initialize the game when the document is loaded
-document.addEventListener('DOMContentLoaded', initGame);
+function handleDisconnect() {
+  console.log('Disconnected from server');
+  setStatus('Disconnected from server. Please refresh.');
+  setButtonsDisabled(true);
+}
+
+function handleWaitingForOpponent() {
+  setStatus('Waiting for an opponent...');
+  addChatMessage('Waiting for an opponent to join...', 'system');
+}
+
+function handleGameStart(data) {
+  yourIndex = data.yourIndex;
+  yourData = data.players[yourIndex];
+  enemyData = data.players[1 - yourIndex];
+  initialHealth = data.initialHealth;
+  
+  // Set player avatars - using the specifically named images as requested
+  const playerImages = ['you.jpg', 'you1.jpg', 'you2.jpg'];
+  const enemyImages = ['enemy.jpg', 'enemy1.jpg', 'enemy2.jpg'];
+  
+  const playerImageIndex = Math.floor(Math.random() * playerImages.length);
+  const enemyImageIndex = Math.floor(Math.random() * enemyImages.length);
+  
+  playerAvatar.src = playerImages[playerImageIndex];
+  enemyAvatar.src = enemyImages[enemyImageIndex];
+  
+  // Set enemy name
+  enemyName = data.players[1 - yourIndex].username || data.enemyUsername || "Enemy";
+  enemyUsername.textContent = enemyName;
+  
+  yourTurn = yourIndex === 0; // First player starts
+  gameActive = true;
+  
+  updateBars();
+  updateButtonStatus();
+  
+  if (yourTurn) {
+    setStatus('Your turn');
+  } else {
+    setStatus('Enemy turn');
+  }
+  
+  // System messages
+  addChatMessage('Game started!', 'system');
+  addChatMessage(`You are playing against ${enemyName}`, 'system');
+  
+  if (yourTurn) {
+    addChatMessage('Your turn first', 'system');
+  } else {
+    addChatMessage('Enemy goes first', 'system');
+  }
+}
+
+function handleMoveConfirmed(data) {
+  const prevHealth = yourData.health;
+  const prevMana = yourData.mana;
+  const prevEnemyHealth = enemyData.health;
+  
+  yourData = data.players[yourIndex];
+  enemyData = data.players[1 - yourIndex];
+  
+  // Calculate changes
+  const healthChange = yourData.health - prevHealth;
+  const manaChange = yourData.mana - prevMana;
+  const enemyHealthChange = enemyData.health - prevEnemyHealth;
+  
+  // Show effects
+  if (healthChange > 0) {
+    showDamageNumber(document.getElementById('you'), healthChange, 'heal');
+  } else if (healthChange < 0) {
+    showDamageNumber(document.getElementById('you'), -healthChange, 'damage');
+  }
+  
+  if (manaChange > 0) {
+    showDamageNumber(document.getElementById('you'), manaChange, 'mana');
+  }
+  
+  if (enemyHealthChange < 0) {
+    showDamageNumber(document.getElementById('enemy'), -enemyHealthChange, 'damage');
+  }
+  
+  updateBars();
+  updateButtonStatus();
+  
+  yourTurn = false;
+  setStatus('Enemy turn');
+}
+
+function handleEnemyMove(data) {
+  const prevHealth = yourData.health;
+  const prevEnemyHealth = enemyData.health;
+  const prevEnemyMana = enemyData.mana;
+  
+  yourData = data.players[yourIndex];
+  enemyData = data.players[1 - yourIndex];
+  
+  // Calculate changes
+  const healthChange = yourData.health - prevHealth;
+  const enemyHealthChange = enemyData.health - prevEnemyHealth;
+  const enemyManaChange = enemyData.mana - prevEnemyMana;
+  
+  // Show effects
+  if (healthChange < 0) {
+    showDamageNumber(document.getElementById('you'), -healthChange, 'damage');
+  }
+  
+  if (enemyHealthChange > 0) {
+    showDamageNumber(document.getElementById('enemy'), enemyHealthChange, 'heal');
+  }
+  
+  if (enemyManaChange > 0) {
+    showDamageNumber(document.getElementById('enemy'), enemyManaChange, 'mana');
+  }
+  
+  // Add chat message for enemy move
+  let moveMessage = `used ${data.move}`;
+  addChatMessage(moveMessage, 'enemy');
+  
+  updateBars();
+  yourTurn = true;
+  updateButtonStatus();
+  
+  setStatus('Your turn');
+}
+
+function handleGameOver(data) {
+  gameActive = false;
+  
+  if (data.winner === yourIndex) {
+    victoryMessage.textContent = 'Victory!';
+    victoryMessage.style.color = '#2ecc71';
+  } else {
+    victoryMessage.textContent = 'Defeat!';
+    victoryMessage.style.color = '#e74c3c';
+  }
+  
+  victoryMessage.style.display = 'block';
+  backToMenuBtn.style.display = 'block';
+  playAgainBtn.style.display = 'block';
+  
+  setButtonsDisabled(true);
+  
+  addChatMessage(data.winner === yourIndex ? 'You won the game!' : 'You lost the game!', 'system');
+}
+
+function handleChatMessage(data) {
+  if (data.fromIndex !== yourIndex) {
+    addChatMessage(data.message, 'enemy');
+  }
+}
+
+// Socket.io event listeners
+if (socket) {
+  socket.on('connect', handleConnect);
+  socket.on('disconnect', handleDisconnect);
+  socket.on('waitingForOpponent', handleWaitingForOpponent);
+  socket.on('gameStart', handleGameStart);
+  socket.on('moveConfirmed', handleMoveConfirmed);
+  socket.on('enemyMove', handleEnemyMove);
+  socket.on('gameOver', handleGameOver);
+  socket.on('chatMessage', handleChatMessage);
+}
+
+// Set up game controls
+attackBtn.addEventListener('click', () => {
+  emitEvent('move', 'attack');
+  setButtonsDisabled(true);
+});
+
+defendBtn.addEventListener('click', () => {
+  emitEvent('move', 'defend');
+  setButtonsDisabled(true);
+});
+
+skillBtn.addEventListener('click', () => {
+  emitEvent('move', 'skill');
+  setButtonsDisabled(true);
+});
+
+manaBtn.addEventListener('click', () => {
+  emitEvent('move', 'mana');
+  setButtonsDisabled(true);
+});
+
+hydraBtn.addEventListener('click', () => {
+  emitEvent('move', 'hydra');
+  setButtonsDisabled(true);
+});
+
+// Handle chat input
+chatInput.addEventListener('input', () => {
+  const length = chatInput.value.length;
+  charCount.textContent = `${length}/20`;
+  
+  // Enable/disable send button
+  chatSendBtn.disabled = length === 0;
+});
+
+chatSendBtn.addEventListener('click', sendChatMessage);
+
+chatInput.addEventListener('keypress', (e) => {
+  if (e.key === 'Enter') {
+    sendChatMessage();
+  }
+});
+
+function sendChatMessage() {
+  const message = chatInput.value.trim();
+  if (message) {
+    emitEvent('chatMessage', { message });
+    addChatMessage(message, 'you');
+    chatInput.value = '';
+    charCount.textContent = '0/20';
+    chatSendBtn.disabled = true;
+  }
+}
+
+// Game end buttons
+backToMenuBtn.addEventListener('click', () => {
+  window.location.href = 'pve.html'; // Redirect to pve.html as requested
+});
+
+playAgainBtn.addEventListener('click', () => {
+  window.location.reload(); // Reload the page to start a new game
+});
