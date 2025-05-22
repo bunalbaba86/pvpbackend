@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>1v1 PvP Game - Home</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <div class="game-header">
+            <h1>1v1 PvP Turn-Based Game</h1>
+        </div>
+        
+        <div class="menu-container">
+            <a href="login.html" class="menu-button">Login</a>
+            <a href="register.html" class="menu-button">Register</a>
+        </div>
+        
+        <div class="game-info">
+            <h2>About the Game</h2>
+            <p>A thrilling turn-based combat experience where you can battle against other players in real-time!</p>
+            <ul>
+                <li>Strategic turn-based combat</li>
+                <li>Real-time chat with opponents</li>
+                <li>Multiple abilities and special attacks</li>
+                <li>Battle other players online</li>
+            </ul>
+        </div>
+    </div>
+    
+    <script src="auth_client.js"></script>
+    <script>
+        // Check if user is logged in
+        document.addEventListener('DOMContentLoaded', function() {
+            if (isLoggedIn()) {
+                const userData = getCurrentUser();
+                
+                // If user is logged in, add a "Play Now" button
+                const menuContainer = document.querySelector('.menu-container');
+                
+                // Clear login/register buttons
+                menuContainer.innerHTML = '';
+                
+                const playButton = document.createElement('a');
+                playButton.href = 'pve.html';
+                playButton.className = 'menu-button play-button';
+                playButton.textContent = 'Play Now';
+                menuContainer.appendChild(playButton);
+                
+                // Add logout button
+                const logoutButton = document.createElement('a');
+                logoutButton.href = '#';
+                logoutButton.className = 'menu-button logout-button';
+                logoutButton.textContent = 'Logout';
+                logoutButton.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    logoutUser();
+                });
+                menuContainer.appendChild(logoutButton);
+                
+                // Welcome message
+                const welcomeMsg = document.createElement('div');
+                welcomeMsg.className = 'welcome-message';
+                welcomeMsg.textContent = `Welcome back, ${userData.username}!`;
+                document.querySelector('.game-header').appendChild(welcomeMsg);
+            }
+        });
+    </script>
+</body>
+</html>
