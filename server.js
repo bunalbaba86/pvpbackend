@@ -1,579 +1,356 @@
 const express = require('express');
 const http = require('http');
-const { Server } = require('socket.io');
+const socketIo = require('socket.io');
 const path = require('path');
 
-// Express and Socket.io setup
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, {
-  cors: { origin: "*" },
-  transports: ['websocket', 'polling']
+const io = socketIo(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"]
+  }
 });
+
+const PORT = process.env.PORT || 3000;
 
 // Serve static files
-app.use(express.static(path.join(__dirname, '.')));
-app.use(express.json());
+app.use(express.static(path.join(__dirname, 'public')));
 
-// Port configuration
-const PORT = process.env.PORT || 8080;
+// Game state
+let waitingPlayers = [];
+let activeGames = new Map();
 
-// NFT Contract Address
-const NFT_CONTRACT_ADDRESS = "0xdfdb045e4300d04ec32058756ec2453409360c5b";
-
-// Game states
-let waitingPlayer = null;
-const games = new Map();
-const playerToGame = new Map();
-
-// NFT statlarını hesaplama fonksiyonu (frontend ile aynı algoritma)
-function calculateNFTStats(tokenId, metadata = null) {
-  let health = 150;
-  let attack = 15;
-  let defense = 5;
-  let speed = 10;
-
-  const tokenIdNum = parseInt(tokenId) || 0;
+// Kryptomon stats calculation
+function calculateKryptomonStats(tokenId) {
+  const tokenNum = parseInt(tokenId) || 0;
   
-  // Token ID bazlı deterministic stat hesaplama
-  const healthMod = (tokenIdNum * 7) % 50;
-  const attackMod = (tokenIdNum * 11) % 25;
-  const defenseMod = (tokenIdNum * 13) % 15;
-  const speedMod = (tokenIdNum * 17) % 20;
+  let health = 100 + (tokenNum * 3) % 50;
+  let attack = 15 + (tokenNum * 5) % 20;
+  let defense = 10 + (tokenNum * 7) % 15;
+  let speed = 12 + (tokenNum * 11) % 18;
   
-  health += healthMod;
-  attack += Math.floor(attackMod / 2);
-  defense += Math.floor(defenseMod / 3);
-  speed += Math.floor(speedMod / 2);
-
-  // Rarity bonusu
-  const rarityValue = tokenIdNum % 100;
-  let rarity = "Common";
-  
-  if (rarityValue >= 95) {
-    health += 50; attack += 12; defense += 8;
-    rarity = "Legendary";
-  } else if (rarityValue >= 80) {
-    health += 30; attack += 8; defense += 5;
-    rarity = "Epic";
-  } else if (rarityValue >= 50) {
-    health += 20; attack += 5; defense += 3;
-    rarity = "Rare";
-  }
-
   return {
-    health: Math.min(health, 300),
-    attack: Math.min(attack, 50),
+    health: Math.min(health, 150),
+    attack: Math.min(attack, 35),
     defense: Math.min(defense, 25),
-    speed: Math.min(speed, 35),
-    rarity: rarity
+    speed: Math.min(speed, 30)
   };
 }
 
-// Wallet address validation
-function isValidWalletAddress(address) {
-  return /^0x[a-fA-F0-9]{40}$/.test(address);
-}
-
-// NFT validation
-function isValidNFT(nft) {
-  return nft && 
-         nft.tokenId && 
-         typeof nft.tokenId === 'string' && 
-         nft.name && 
-         nft.image;
-}
-
-// NFT sahipliği doğrulama endpoint'i
-app.get('/verify-nft/:address/:tokenId', async (req, res) => {
-  try {
-    const { address, tokenId } = req.params;
-    
-    if (!address || !tokenId || !isValidWalletAddress(address)) {
-      return res.json({ valid: false, message: 'Invalid parameters' });
-    }
-    
-    const stats = calculateNFTStats(tokenId);
-    
-    res.json({
-      valid: true,
-      tokenId: tokenId,
-      contractAddress: NFT_CONTRACT_ADDRESS,
-      stats: stats
-    });
-    
-  } catch (error) {
-    console.error('NFT verification error:', error);
-    res.json({ valid: false, message: 'Verification failed' });
-  }
-});
-
-// NFT metadata endpoint'i
-app.get('/nft-metadata/:tokenId', async (req, res) => {
-  try {
-    const { tokenId } = req.params;
-    
-    const metadata = {
-      name: `Warrior #${tokenId}`,
-      description: `NFT Warrior #${tokenId} from the collection`,
-      image: `https://picsum.photos/300/300?random=${tokenId}`,
-      attributes: [
-        { trait_type: "Power", value: (parseInt(tokenId) * 7) % 100 },
-        { trait_type: "Speed", value: (parseInt(tokenId) * 11) % 100 },
-        { trait_type: "Defense", value: (parseInt(tokenId) * 13) % 100 }
-      ]
-    };
-    
-    const stats = calculateNFTStats(tokenId, metadata);
-    
-    res.json({
-      metadata: metadata,
-      stats: stats
-    });
-    
-  } catch (error) {
-    console.error('Metadata error:', error);
-    res.status(500).json({ error: 'Failed to fetch metadata' });
-  }
-});
-
-// Oyun oluşturma fonksiyonu (NFT destekli)
-function createNewGame(player1Id, player2Id, player1WalletAddress, player2WalletAddress, player1NFT, player2NFT) {
-  // NFT validasyonu
-  if (!isValidNFT(player1NFT) || !isValidNFT(player2NFT)) {
-    throw new Error('Invalid NFT data');
-  }
-
-  // NFT statlarını hesapla
-  const player1Stats = calculateNFTStats(player1NFT.tokenId);
-  const player2Stats = calculateNFTStats(player2NFT.tokenId);
-  
-  console.log(`Creating game: ${player1NFT.name} vs ${player2NFT.name}`);
-  console.log(`Stats: P1(${player1Stats.health}HP, ${player1Stats.attack}ATK) vs P2(${player2Stats.health}HP, ${player2Stats.attack}ATK)`);
+// Game logic functions
+function createGameState(player1, player2) {
+  const p1Stats = calculateKryptomonStats(player1.selectedKryptomon[0].nft.tokenId);
+  const p2Stats = calculateKryptomonStats(player2.selectedKryptomon[0].nft.tokenId);
   
   return {
-    players: [player1Id, player2Id],
-    playerWalletAddresses: [player1WalletAddress, player2WalletAddress],
-    playerNFTs: [player1NFT, player2NFT],
-    turnIndex: 0, // İlk oyuncu başlar
-    playersData: [
-      { 
-        health: player1Stats.health, 
-        maxHealth: player1Stats.health,
-        mana: 100, 
-        hydraActive: 0, 
-        hydraUsed: false,
-        nftStats: player1Stats
+    players: [player1, player2],
+    gameData: [
+      {
+        health: p1Stats.health,
+        maxHealth: p1Stats.health,
+        mana: 50,
+        maxMana: 100,
+        attack: p1Stats.attack,
+        defense: p1Stats.defense,
+        activeKryptomon: 0,
+        kryptomonTeam: player1.selectedKryptomon,
+        ultimateUsed: false,
+        defending: false
       },
-      { 
-        health: player2Stats.health,
-        maxHealth: player2Stats.health, 
-        mana: 100, 
-        hydraActive: 0, 
-        hydraUsed: false,
-        nftStats: player2Stats
+      {
+        health: p2Stats.health,
+        maxHealth: p2Stats.health,
+        mana: 50,
+        maxMana: 100,
+        attack: p2Stats.attack,
+        defense: p2Stats.defense,
+        activeKryptomon: 0,
+        kryptomonTeam: player2.selectedKryptomon,
+        ultimateUsed: false,
+        defending: false
       }
     ],
-    gameOver: false,
-    winner: null,
-    createdAt: Date.now()
+    currentTurn: 0,
+    gameActive: true,
+    turnCount: 1
   };
 }
 
-// Hareket validation (NFT statlarını göz önünde bulundurarak)
-function canPerformMove(move, playerData) {
-  if (!playerData) return false;
+function processMove(gameState, playerIndex, move, activeKryptomon) {
+  const player = gameState.gameData[playerIndex];
+  const opponent = gameState.gameData[1 - playerIndex];
   
-  switch (move) {
-    case 'attack': return playerData.mana >= 10;
-    case 'defend': return playerData.mana >= 5;
-    case 'skill': return playerData.mana >= 20;
-    case 'mana': return true;
-    case 'hydra': return playerData.mana >= 30 && !playerData.hydraUsed;
-    default: return false;
+  // Reset defending status
+  player.defending = false;
+  
+  // Switch active Kryptomon if specified
+  if (activeKryptomon !== undefined && activeKryptomon >= 0 && activeKryptomon < 3) {
+    player.activeKryptomon = activeKryptomon;
+    const newKryptomon = player.kryptomonTeam[activeKryptomon];
+    if (newKryptomon) {
+      const newStats = calculateKryptomonStats(newKryptomon.nft.tokenId);
+      player.health = newStats.health;
+      player.maxHealth = newStats.health;
+      player.attack = newStats.attack;
+      player.defense = newStats.defense;
+    }
   }
-}
-
-// Hareket uygulama (NFT statları ile dengeli hasar hesaplama)
-function applyMove(move, currentPlayerData, otherPlayerData) {
-  const attackPower = currentPlayerData.nftStats?.attack || 15;
-  const defensePower = otherPlayerData.nftStats?.defense || 5;
-  const speed = currentPlayerData.nftStats?.speed || 10;
-  
-  console.log(`Applying move: ${move}, Attack: ${attackPower}, Defense: ${defensePower}`);
   
   switch (move) {
     case 'attack':
-      currentPlayerData.mana -= 10;
-      // Hasar hesaplama: saldırı gücü - savunmanın 1/3'ü
-      const attackDamage = Math.max(5, attackPower - Math.floor(defensePower / 3));
-      otherPlayerData.health -= attackDamage;
-      console.log(`Attack damage: ${attackDamage}`);
+      if (player.mana >= 10) {
+        player.mana -= 10;
+        let damage = Math.max(1, player.attack - (opponent.defending ? opponent.defense * 2 : opponent.defense));
+        opponent.health = Math.max(0, opponent.health - damage);
+      }
       break;
       
     case 'defend':
-      currentPlayerData.mana -= 5;
-      // İyileşme: 10 + savunmanın 1/4'ü
-      const healAmount = 10 + Math.floor((currentPlayerData.nftStats?.defense || 5) / 4);
-      currentPlayerData.health = Math.min(
-        currentPlayerData.health + healAmount, 
-        currentPlayerData.maxHealth
-      );
-      console.log(`Heal amount: ${healAmount}`);
+      if (player.mana >= 5) {
+        player.mana -= 5;
+        player.defending = true;
+        player.health = Math.min(player.maxHealth, player.health + 5);
+      }
       break;
       
     case 'skill':
-      currentPlayerData.mana -= 20;
-      // Büyük hasar: saldırı gücü * 2 - savunmanın yarısı
-      const skillDamage = Math.max(10, (attackPower * 2) - Math.floor(defensePower / 2));
-      otherPlayerData.health -= skillDamage;
-      console.log(`Skill damage: ${skillDamage}`);
+      if (player.mana >= 20) {
+        player.mana -= 20;
+        let damage = Math.max(1, Math.floor(player.attack * 1.5) - opponent.defense);
+        opponent.health = Math.max(0, opponent.health - damage);
+      }
       break;
       
     case 'mana':
-      // Mana yenileme: 15 + hızın 1/5'i
-      const manaBonus = 15 + Math.floor(speed / 5);
-      currentPlayerData.mana = Math.min(currentPlayerData.mana + manaBonus, 100);
-      console.log(`Mana restored: ${manaBonus}`);
+      player.mana = Math.min(player.maxMana, player.mana + 25);
       break;
       
     case 'hydra':
-      currentPlayerData.mana -= 30;
-      // Hydra başlangıç hasarı
-      const hydraDamage = Math.max(8, attackPower - Math.floor(defensePower / 4));
-      otherPlayerData.health -= hydraDamage;
-      currentPlayerData.hydraActive = 3; // 3 tur boyunca aktif
-      currentPlayerData.hydraUsed = true;
-      console.log(`Hydra initial damage: ${hydraDamage}`);
+      if (player.mana >= 30 && !player.ultimateUsed) {
+        player.mana -= 30;
+        player.ultimateUsed = true;
+        let damage = Math.max(1, player.attack * 2 - opponent.defense);
+        opponent.health = Math.max(0, opponent.health - damage);
+      }
       break;
   }
   
-  // HYDRA devam eden hasar
-  if (currentPlayerData.hydraActive > 0) {
-    const hydraTickDamage = Math.max(5, Math.floor(attackPower / 2));
-    otherPlayerData.health -= hydraTickDamage;
-    currentPlayerData.hydraActive -= 1;
-    console.log(`Hydra tick damage: ${hydraTickDamage}, remaining: ${currentPlayerData.hydraActive}`);
+  // Add mana regeneration each turn
+  player.mana = Math.min(player.maxMana, player.mana + 5);
+  
+  // Check for game over
+  if (opponent.health <= 0) {
+    gameState.gameActive = false;
+    return playerIndex; // Winner
   }
   
-  // Sağlık sınırları
-  currentPlayerData.health = Math.max(0, currentPlayerData.health);
-  otherPlayerData.health = Math.max(0, otherPlayerData.health);
-  currentPlayerData.mana = Math.max(0, Math.min(100, currentPlayerData.mana));
+  // Switch turns
+  gameState.currentTurn = 1 - gameState.currentTurn;
+  gameState.turnCount++;
+  
+  return null; // No winner yet
 }
 
-// Oyun bitişi kontrolü
-function checkGameOver(game) {
-  if (game.playersData[0].health <= 0) {
-    game.gameOver = true;
-    game.winner = 1; // İkinci oyuncu kazandı
-    return 1;
-  }
-  if (game.playersData[1].health <= 0) {
-    game.gameOver = true;
-    game.winner = 0; // İlk oyuncu kazandı
-    return 0;
-  }
-  return -1; // Oyun devam ediyor
-}
-
-// Oyun temizleme fonksiyonu
-function cleanupGame(roomId) {
-  if (games.has(roomId)) {
-    const game = games.get(roomId);
-    game.players.forEach(playerId => {
-      playerToGame.delete(playerId);
-    });
-    games.delete(roomId);
-    console.log(`Game ${roomId} cleaned up`);
-  }
-}
-
-// Socket.io bağlantı yönetimi
+// Socket.io connection handling
 io.on('connection', (socket) => {
-  console.log(`Player connected: ${socket.id}`);
+  console.log('Player connected:', socket.id);
 
-  socket.playerIndex = null;
-  socket.roomId = null;
-  socket.walletAddress = null;
-  socket.selectedNFT = null;
-
-  // Oyuncu hareketi dinleyicisi
   socket.on('playerMove', (data) => {
     try {
       if (data.move === 'join') {
-        // Oyuna katılma
-        socket.walletAddress = data.walletAddress;
-        socket.selectedNFT = data.selectedNFT;
+        // Player wants to join a game
+        const playerData = {
+          socketId: socket.id,
+          walletAddress: data.walletAddress,
+          selectedKryptomon: data.selectedKryptomon || []
+        };
+
+        // Remove player from waiting list if already there
+        waitingPlayers = waitingPlayers.filter(p => p.socketId !== socket.id);
         
-        console.log(`Player ${socket.id} joining with wallet: ${socket.walletAddress}`);
-        console.log(`Selected NFT:`, socket.selectedNFT?.name || 'Unknown');
+        // Add to waiting list
+        waitingPlayers.push(playerData);
         
-        // Validasyon
-        if (!isValidWalletAddress(socket.walletAddress)) {
-          socket.emit('errorMessage', 'Invalid wallet address');
-          return;
-        }
-        
-        if (!isValidNFT(socket.selectedNFT)) {
-          socket.emit('errorMessage', 'Invalid NFT data');
-          return;
-        }
-        
-        // Eski oyun temizliği
-        if (socket.roomId) {
-          const oldGameId = socket.roomId;
-          const oldGame = games.get(oldGameId);
+        console.log(`Player ${socket.id} joined queue. Queue length: ${waitingPlayers.length}`);
+
+        if (waitingPlayers.length >= 2) {
+          // Start a new game
+          const player1 = waitingPlayers.shift();
+          const player2 = waitingPlayers.shift();
           
-          if (oldGame) {
-            const otherPlayerId = oldGame.players.find(id => id !== socket.id);
-            if (otherPlayerId) {
-              io.to(otherPlayerId).emit('gameOver', { 
-                winner: 'player',
-                reason: 'Opponent disconnected'
-              });
-            }
-            cleanupGame(oldGameId);
-          }
+          const gameId = `${player1.socketId}-${player2.socketId}`;
+          const gameState = createGameState(player1, player2);
           
-          socket.leave(oldGameId);
-          socket.roomId = null;
-          socket.playerIndex = null;
-        }
-        
-        // Bekleyen oyuncu kontrolü
-        if (waitingPlayer === null) {
-          waitingPlayer = socket.id;
-          socket.emit('waitingForOpponent');
-          console.log(`Player ${socket.id} is now waiting for opponent`);
-        } else {
-          const waitingPlayerSocket = io.sockets.sockets.get(waitingPlayer);
+          activeGames.set(gameId, gameState);
           
-          if (!waitingPlayerSocket) {
-            console.log('Waiting player disconnected, setting new waiting player');
-            waitingPlayer = socket.id;
-            socket.emit('waitingForOpponent');
-            return;
-          }
+          // Notify both players
+          const p1Socket = io.sockets.sockets.get(player1.socketId);
+          const p2Socket = io.sockets.sockets.get(player2.socketId);
           
-          // İki oyuncu eşleşti, oyun oluştur
-          try {
-            const roomId = `room_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-            const game = createNewGame(
-              waitingPlayer, 
-              socket.id,
-              waitingPlayerSocket.walletAddress,
-              socket.walletAddress,
-              waitingPlayerSocket.selectedNFT,
-              socket.selectedNFT
-            );
+          if (p1Socket && p2Socket) {
+            p1Socket.join(gameId);
+            p2Socket.join(gameId);
             
-            games.set(roomId, game);
-            
-            // Oyuncuları odaya ekle
-            waitingPlayerSocket.join(roomId);
-            socket.join(roomId);
-            
-            waitingPlayerSocket.playerIndex = 0;
-            waitingPlayerSocket.roomId = roomId;
-            socket.playerIndex = 1;
-            socket.roomId = roomId;
-            
-            playerToGame.set(waitingPlayer, roomId);
-            playerToGame.set(socket.id, roomId);
-            
-            console.log(`Game created: ${roomId}`);
-            
-            // Oyun başlama mesajları
-            io.to(waitingPlayer).emit('gameStart', {
+            // Send game start data
+            p1Socket.emit('gameStart', {
               yourIndex: 0,
-              you: game.playersData[0],
-              enemy: game.playersData[1],
-              yourNFT: waitingPlayerSocket.selectedNFT,
-              enemyNFT: socket.selectedNFT,
-              enemyWalletAddress: socket.walletAddress,
-              yourTurn: true // İlk oyuncu başlar
+              you: gameState.gameData[0],
+              enemy: gameState.gameData[1],
+              yourTurn: gameState.currentTurn === 0,
+              enemyKryptomon: player2.selectedKryptomon[0]
             });
             
-            io.to(socket.id).emit('gameStart', {
+            p2Socket.emit('gameStart', {
               yourIndex: 1,
-              you: game.playersData[1],
-              enemy: game.playersData[0],
-              yourNFT: socket.selectedNFT,
-              enemyNFT: waitingPlayerSocket.selectedNFT,
-              enemyWalletAddress: waitingPlayerSocket.walletAddress,
-              yourTurn: false // İkinci oyuncu bekler
+              you: gameState.gameData[1],
+              enemy: gameState.gameData[0],
+              yourTurn: gameState.currentTurn === 1,
+              enemyKryptomon: player1.selectedKryptomon[0]
             });
             
-            waitingPlayer = null;
-            
-          } catch (error) {
-            console.error('Error creating game:', error);
-            socket.emit('errorMessage', 'Failed to create game');
-            waitingPlayerSocket.emit('errorMessage', 'Failed to create game');
+            console.log(`Game started: ${gameId}`);
           }
+        } else {
+          socket.emit('waitingForOpponent');
         }
         
-        return;
-      }
-      
-      // Normal oyun hareketi
-      const roomId = socket.roomId;
-      const playerIndex = socket.playerIndex;
-      
-      if (!roomId || playerIndex === null) {
-        socket.emit('errorMessage', 'You are not in a game room.');
-        return;
-      }
-      
-      const game = games.get(roomId);
-      if (!game || game.gameOver) {
-        socket.emit('errorMessage', 'Game is not active.');
-        return;
-      }
-      
-      if (playerIndex !== game.turnIndex) {
-        socket.emit('errorMessage', 'Not your turn.');
-        return;
-      }
-      
-      const currentPlayerData = game.playersData[playerIndex];
-      const otherPlayerIndex = 1 - playerIndex;
-      const otherPlayerData = game.playersData[otherPlayerIndex];
-      
-      if (!canPerformMove(data.move, currentPlayerData)) {
-        socket.emit('errorMessage', 'Not enough mana or invalid move.');
-        return;
-      }
-      
-      console.log(`Player ${playerIndex} performs ${data.move}`);
-      
-      // Hareketi uygula
-      applyMove(data.move, currentPlayerData, otherPlayerData);
-      
-      // Oyun bitişi kontrolü
-      const winnerIndex = checkGameOver(game);
-      
-      if (winnerIndex !== -1) {
-        // Oyun bitti
-        console.log(`Game ${roomId} ended, winner: ${winnerIndex}`);
-        io.to(roomId).emit('gameOver', {
-          winner: winnerIndex === playerIndex ? 'player' : 'enemy',
-          winnerNFT: game.playerNFTs[winnerIndex].name,
-          reason: 'Combat victory'
-        });
+      } else {
+        // Game move
+        const gameId = findGameBySocket(socket.id);
+        if (!gameId) {
+          socket.emit('errorMessage', 'Game not found');
+          return;
+        }
         
-        // Oyunu temizle
-        setTimeout(() => cleanupGame(roomId), 5000);
-        return;
+        const gameState = activeGames.get(gameId);
+        if (!gameState || !gameState.gameActive) {
+          socket.emit('errorMessage', 'Game not active');
+          return;
+        }
+        
+        const playerIndex = gameState.players.findIndex(p => p.socketId === socket.id);
+        if (playerIndex === -1) {
+          socket.emit('errorMessage', 'Player not found in game');
+          return;
+        }
+        
+        if (gameState.currentTurn !== playerIndex) {
+          socket.emit('errorMessage', 'Not your turn');
+          return;
+        }
+        
+        // Process the move
+        const winner = processMove(gameState, playerIndex, data.move, data.activeKryptomon);
+        
+        if (winner !== null) {
+          // Game over
+          const winnerSocket = io.sockets.sockets.get(gameState.players[winner].socketId);
+          const loserSocket = io.sockets.sockets.get(gameState.players[1 - winner].socketId);
+          
+          if (winnerSocket) winnerSocket.emit('gameOver', { winner: 'player' });
+          if (loserSocket) loserSocket.emit('gameOver', { winner: 'enemy' });
+          
+          activeGames.delete(gameId);
+          console.log(`Game ended: ${gameId}, Winner: Player ${winner}`);
+        } else {
+          // Continue game
+          const p1Socket = io.sockets.sockets.get(gameState.players[0].socketId);
+          const p2Socket = io.sockets.sockets.get(gameState.players[1].socketId);
+          
+          if (p1Socket) {
+            p1Socket.emit('moveConfirmed', {
+              you: gameState.gameData[0],
+              enemy: gameState.gameData[1],
+              yourTurn: gameState.currentTurn === 0
+            });
+          }
+          
+          if (p2Socket) {
+            p2Socket.emit('moveConfirmed', {
+              you: gameState.gameData[1],
+              enemy: gameState.gameData[0],
+              yourTurn: gameState.currentTurn === 1
+            });
+          }
+        }
       }
-      
-      // Sıra değiştir
-      game.turnIndex = otherPlayerIndex;
-      
-      // Hareket onayı (mevcut oyuncuya)
-      socket.emit('moveConfirmed', {
-        you: currentPlayerData,
-        enemy: otherPlayerData,
-        move: data.move,
-        yourTurn: false
-      });
-      
-      // Karşı oyuncuya hareket bilgisi
-      const otherPlayerId = game.players[otherPlayerIndex];
-      io.to(otherPlayerId).emit('enemyMove', {
-        you: otherPlayerData,
-        enemy: currentPlayerData,
-        move: data.move,
-        yourTurn: true
-      });
-      
     } catch (error) {
-      console.error('Error in playerMove:', error);
-      socket.emit('errorMessage', 'An error occurred processing your move.');
+      console.error('Error processing move:', error);
+      socket.emit('errorMessage', 'Error processing move');
     }
   });
-  
-  // Chat mesajları
+
   socket.on('chatMessage', (data) => {
-    try {
-      if (!socket.roomId || socket.playerIndex === null) return;
+    const gameId = findGameBySocket(socket.id);
+    if (gameId) {
+      const gameState = activeGames.get(gameId);
+      const playerIndex = gameState.players.findIndex(p => p.socketId === socket.id);
       
-      const trimmedMessage = data.message.substring(0, 20);
-      
-      socket.to(socket.roomId).emit('chatMessage', {
-        message: trimmedMessage,
-        fromIndex: socket.playerIndex
+      socket.to(gameId).emit('chatMessage', {
+        message: data.message,
+        fromIndex: playerIndex
       });
-    } catch (error) {
-      console.error('Error in chatMessage:', error);
     }
   });
-  
-  // Bağlantı kopması
+
   socket.on('disconnect', () => {
-    console.log(`Player disconnected: ${socket.id}`);
+    console.log('Player disconnected:', socket.id);
     
-    // Bekleyen oyuncu kontrolü
-    if (waitingPlayer === socket.id) {
-      waitingPlayer = null;
-      console.log('Waiting player disconnected');
-    }
+    // Remove from waiting list
+    waitingPlayers = waitingPlayers.filter(p => p.socketId !== socket.id);
     
-    // Oyun temizliği
-    const roomId = socket.roomId;
-    if (roomId && games.has(roomId)) {
-      const game = games.get(roomId);
-      
-      const otherPlayerId = game.players.find(id => id !== socket.id);
-      if (otherPlayerId) {
-        io.to(otherPlayerId).emit('gameOver', { 
-          winner: 'player',
-          reason: 'Opponent disconnected'
-        });
+    // Handle active games
+    const gameId = findGameBySocket(socket.id);
+    if (gameId) {
+      const gameState = activeGames.get(gameId);
+      if (gameState) {
+        const otherPlayer = gameState.players.find(p => p.socketId !== socket.id);
+        if (otherPlayer) {
+          const otherSocket = io.sockets.sockets.get(otherPlayer.socketId);
+          if (otherSocket) {
+            otherSocket.emit('gameOver', { winner: 'player', reason: 'opponent_disconnected' });
+          }
+        }
+        activeGames.delete(gameId);
       }
-      
-      cleanupGame(roomId);
     }
   });
 });
 
-// Periyodik oyun temizliği (10 dakikadan eski oyunları temizle)
-setInterval(() => {
-  const now = Date.now();
-  const maxAge = 10 * 60 * 1000; // 10 dakika
-  
-  for (const [roomId, game] of games.entries()) {
-    if (now - game.createdAt > maxAge) {
-      console.log(`Cleaning up old game: ${roomId}`);
-      cleanupGame(roomId);
+function findGameBySocket(socketId) {
+  for (const [gameId, gameState] of activeGames) {
+    if (gameState.players.some(p => p.socketId === socketId)) {
+      return gameId;
     }
   }
-}, 5 * 60 * 1000); // Her 5 dakikada bir kontrol et
-
-// Serve index.html at root route
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'index.html'));
-});
-
-// Route handler for game.html
-app.get('/game.html', (req, res) => {
-  res.sendFile(path.join(__dirname, 'index.html'));
-});
+  return null;
+}
 
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({
-    status: 'healthy',
-    games: games.size,
-    waitingPlayer: waitingPlayer ? 'yes' : 'no',
-    uptime: process.uptime()
+    status: 'OK',
+    activeGames: activeGames.size,
+    waitingPlayers: waitingPlayers.length,
+    timestamp: new Date().toISOString()
   });
 });
 
 // Start server
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`🎮 NFT PvP Server running on port ${PORT}`);
-  console.log(`📝 Supporting NFT contract: ${NFT_CONTRACT_ADDRESS}`);
-  console.log(`🔗 Health check: http://localhost:${PORT}/health`);
+server.listen(PORT, () => {
+  console.log(`Kryptomon Battle Server running on port ${PORT}`);
+  console.log(`Health check: http://localhost:${PORT}/health`);
 });
+
+// Cleanup inactive games periodically
+setInterval(() => {
+  const now = Date.now();
+  for (const [gameId, gameState] of activeGames) {
+    // Remove games older than 30 minutes
+    if (now - gameState.lastActivity > 30 * 60 * 1000) {
+      activeGames.delete(gameId);
+      console.log(`Cleaned up inactive game: ${gameId}`);
+    }
+  }
+}, 5 * 60 * 1000); // Check every 5 minutes
