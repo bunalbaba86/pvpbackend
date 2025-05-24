@@ -1,15 +1,17 @@
 {
-  "name": "pvp-game-server",
+  "name": "kryptomon-battle-arena",
   "version": "1.0.0",
-  "description": "1v1 PvP Turn-Based Game Server",
+  "description": "Kryptomon Battle Arena Game",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "dev": "nodemon server.js"
   },
   "dependencies": {
-    "express": "^4.17.1",
-    "socket.io": "^4.5.1",
-    "http": "^0.0.1-security",
-    "path": "^0.12.7"
+    "express": "^4.18.2",
+    "socket.io": "^4.7.2"
+  },
+  "engines": {
+    "node": ">=16.0.0"
   }
 }
