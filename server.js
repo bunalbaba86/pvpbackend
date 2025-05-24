@@ -2,6 +2,7 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
+const axios = require('axios'); // NFT API çağrıları için
 
 // Express and Socket.io setup
 const app = express();
@@ -17,49 +18,143 @@ app.use(express.json());
 // Port configuration
 const PORT = process.env.PORT || 8080;
 
-// Game states
-let waitingPlayer = null;
-const games = new Map(); // roomId -> gameState
-const playerToGame = new Map(); // playerId -> roomId
-
 // NFT Contract Address
 const NFT_CONTRACT_ADDRESS = "0xdfdb045e4300d04ec32058756ec2453409360c5b";
 
-// Wallet address validation
-function isValidWalletAddress(address) {
-  return /^0x[a-fA-F0-9]{40}$/.test(address);
+// Game states
+let waitingPlayer = null;
+const games = new Map();
+const playerToGame = new Map();
+
+// NFT statlarını hesaplama fonksiyonu
+function calculateNFTStats(tokenId, metadata = null) {
+  let health = 150;
+  let attack = 15;
+  let defense = 5;
+  let speed = 10;
+
+  const tokenIdNum = parseInt(tokenId) || 0;
+  
+  // Token ID bazlı deterministic stat hesaplama
+  const healthMod = (tokenIdNum * 7) % 50;
+  const attackMod = (tokenIdNum * 11) % 25;
+  const defenseMod = (tokenIdNum * 13) % 15;
+  const speedMod = (tokenIdNum * 17) % 20;
+  
+  health += healthMod;
+  attack += Math.floor(attackMod / 2);
+  defense += Math.floor(defenseMod / 3);
+  speed += Math.floor(speedMod / 2);
+
+  // Rarity bonusu
+  const rarityValue = tokenIdNum % 100;
+  
+  if (rarityValue >= 95) {
+    health += 50;
+    attack += 12;
+    defense += 8;
+  } else if (rarityValue >= 80) {
+    health += 30;
+    attack += 8;
+    defense += 5;
+  } else if (rarityValue >= 50) {
+    health += 20;
+    attack += 5;
+    defense += 3;
+  }
+
+  return {
+    health: Math.min(health, 300),
+    attack: Math.min(attack, 50),
+    defense: Math.min(defense, 25),
+    speed: Math.min(speed, 35)
+  };
 }
 
-// NFT stats validation
-function validateNFTStats(stats) {
-  return stats && 
-         typeof stats.health === 'number' && stats.health > 0 && stats.health <= 300 &&
-         typeof stats.attack === 'number' && stats.attack > 0 && stats.attack <= 40 &&
-         typeof stats.defense === 'number' && stats.defense >= 0 && stats.defense <= 20 &&
-         typeof stats.speed === 'number' && stats.speed > 0 && stats.speed <= 30;
-}
+// NFT sahipliği doğrulama endpoint'i
+app.get('/verify-nft/:address/:tokenId', async (req, res) => {
+  try {
+    const { address, tokenId } = req.params;
+    
+    // Burada gerçek blockchain verification yapılabilir
+    // Şimdilik basit doğrulama
+    if (!address || !tokenId) {
+      return res.json({ valid: false, message: 'Invalid parameters' });
+    }
+    
+    // Demo amaçlı her NFT'yi geçerli say
+    const stats = calculateNFTStats(tokenId);
+    
+    res.json({
+      valid: true,
+      tokenId: tokenId,
+      contractAddress: NFT_CONTRACT_ADDRESS,
+      stats: stats
+    });
+    
+  } catch (error) {
+    console.error('NFT verification error:', error);
+    res.json({ valid: false, message: 'Verification failed' });
+  }
+});
 
-// Create a new game with NFT data
+// NFT metadata endpoint'i
+app.get('/nft-metadata/:tokenId', async (req, res) => {
+  try {
+    const { tokenId } = req.params;
+    
+    // Demo metadata döndür
+    const metadata = {
+      name: `NFT #${tokenId}`,
+      description: `This is NFT number ${tokenId} from the collection`,
+      image: `https://picsum.photos/300/300?random=${tokenId}`,
+      attributes: [
+        { trait_type: "Power", value: (parseInt(tokenId) * 7) % 100 },
+        { trait_type: "Speed", value: (parseInt(tokenId) * 11) % 100 },
+        { trait_type: "Defense", value: (parseInt(tokenId) * 13) % 100 }
+      ]
+    };
+    
+    const stats = calculateNFTStats(tokenId, metadata);
+    
+    res.json({
+      metadata: metadata,
+      stats: stats
+    });
+    
+  } catch (error) {
+    console.error('Metadata error:', error);
+    res.status(500).json({ error: 'Failed to fetch metadata' });
+  }
+});
+
+// Oyun oluşturma fonksiyonu (NFT destekli)
 function createNewGame(player1Id, player2Id, player1WalletAddress, player2WalletAddress, player1NFT, player2NFT) {
+  // NFT statlarını hesapla
+  const player1Stats = calculateNFTStats(player1NFT.tokenId);
+  const player2Stats = calculateNFTStats(player2NFT.tokenId);
+  
   return {
     players: [player1Id, player2Id],
     playerWalletAddresses: [player1WalletAddress, player2WalletAddress],
-    playerNFTData: [player1NFT, player2NFT],
-    turnIndex: 0, // First player's turn
+    playerNFTs: [player1NFT, player2NFT],
+    turnIndex: 0,
     playersData: [
       { 
-        health: player1NFT.stats.health, 
-        maxHealth: player1NFT.stats.health,
+        health: player1Stats.health, 
+        maxHealth: player1Stats.health,
         mana: 100, 
         hydraActive: 0, 
-        hydraUsed: false 
+        hydraUsed: false,
+        nftStats: player1Stats
       },
       { 
-        health: player2NFT.stats.health, 
-        maxHealth: player2NFT.stats.health,
+        health: player2Stats.health,
+        maxHealth: player2Stats.health, 
         mana: 100, 
         hydraActive: 0, 
-        hydraUsed: false 
+        hydraUsed: false,
+        nftStats: player2Stats
       }
     ],
     gameOver: false,
@@ -67,172 +162,105 @@ function createNewGame(player1Id, player2Id, player1WalletAddress, player2Wallet
   };
 }
 
-// Calculate damage based on NFT stats
-function calculateDamage(attackerStats, defenderStats, moveType) {
-  let baseDamage = 0;
-  
-  switch (moveType) {
-    case 'attack':
-      baseDamage = attackerStats.attack;
-      break;
-    case 'skill':
-      baseDamage = attackerStats.attack * 2;
-      break;
-    case 'hydra':
-      baseDamage = attackerStats.attack + 10;
-      break;
-  }
-  
-  // Defense reduction
-  const defenseReduction = Math.floor(defenderStats.defense / 2);
-  const finalDamage = Math.max(1, baseDamage - defenseReduction);
-  
-  return finalDamage;
-}
-
-// Calculate heal amount based on NFT stats
-function calculateHeal(nftStats) {
-  return Math.floor(nftStats.defense * 2) + 5;
-}
-
-// Calculate mana cost based on NFT stats
-function calculateManaCost(nftStats, moveType) {
-  switch (moveType) {
-    case 'attack':
-      return Math.max(5, 15 - Math.floor(nftStats.speed / 10));
-    case 'defend':
-      return Math.max(3, 8 - Math.floor(nftStats.defense / 8));
-    case 'skill':
-      return Math.max(10, 25 - Math.floor(nftStats.attack / 8));
-    case 'hydra':
-      return Math.max(20, 35 - Math.floor(nftStats.attack / 5));
-    default:
-      return 0;
+// Hareket validation (NFT statlarını göz önünde bulundurarak)
+function canPerformMove(move, playerData) {
+  switch (move) {
+    case 'attack': return playerData.mana >= 10;
+    case 'defend': return playerData.mana >= 5;
+    case 'skill': return playerData.mana >= 20;
+    case 'mana': return true;
+    case 'hydra': return playerData.mana >= 30 && !playerData.hydraUsed;
+    default: return false;
   }
 }
 
-// Check if move is valid with NFT stats
-function canPerformMove(move, playerData, nftStats) {
-  const manaCost = calculateManaCost(nftStats, move);
+// Hareket uygulama (NFT statları ile)
+function applyMove(move, currentPlayerData, otherPlayerData) {
+  const attackPower = currentPlayerData.nftStats?.attack || 15;
+  const defensePower = otherPlayerData.nftStats?.defense || 5;
   
   switch (move) {
     case 'attack':
-    case 'defend':
-    case 'skill':
-      return playerData.mana >= manaCost;
-    case 'mana':
-      return true;
-    case 'hydra':
-      return playerData.mana >= manaCost && !playerData.hydraUsed;
-    default:
-      return false;
-  }
-}
-
-// Apply move effects with NFT stats
-function applyMove(move, currentPlayerData, otherPlayerData, currentNFTStats, otherNFTStats) {
-  const manaCost = calculateManaCost(currentNFTStats, move);
-  let damageDealt = 0;
-  let healAmount = 0;
-  
-  switch (move) {
-    case 'attack':
-      currentPlayerData.mana -= manaCost;
-      damageDealt = calculateDamage(currentNFTStats, otherNFTStats, 'attack');
-      otherPlayerData.health -= damageDealt;
+      currentPlayerData.mana -= 10;
+      const attackDamage = Math.max(1, attackPower - Math.floor(defensePower / 3));
+      otherPlayerData.health -= attackDamage;
       break;
     case 'defend':
-      currentPlayerData.mana -= manaCost;
-      healAmount = calculateHeal(currentNFTStats);
-      currentPlayerData.health = Math.min(currentPlayerData.maxHealth, currentPlayerData.health + healAmount);
+      currentPlayerData.mana -= 5;
+      const healAmount = 10 + Math.floor((currentPlayerData.nftStats?.defense || 5) / 4);
+      currentPlayerData.health = Math.min(
+        currentPlayerData.health + healAmount, 
+        currentPlayerData.maxHealth
+      );
       break;
     case 'skill':
-      currentPlayerData.mana -= manaCost;
-      damageDealt = calculateDamage(currentNFTStats, otherNFTStats, 'skill');
-      otherPlayerData.health -= damageDealt;
+      currentPlayerData.mana -= 20;
+      const skillDamage = Math.max(1, (attackPower * 2) - Math.floor(defensePower / 2));
+      otherPlayerData.health -= skillDamage;
       break;
     case 'mana':
-      const manaRestore = 15 + Math.floor(currentNFTStats.speed / 10);
-      currentPlayerData.mana = Math.min(100, currentPlayerData.mana + manaRestore);
+      const manaBonus = 15 + Math.floor((currentPlayerData.nftStats?.speed || 10) / 5);
+      currentPlayerData.mana = Math.min(currentPlayerData.mana + manaBonus, 100);
       break;
     case 'hydra':
-      currentPlayerData.mana -= manaCost;
-      damageDealt = calculateDamage(currentNFTStats, otherNFTStats, 'hydra');
-      otherPlayerData.health -= damageDealt;
+      currentPlayerData.mana -= 30;
+      const hydraDamage = Math.max(5, attackPower - Math.floor(defensePower / 4));
+      otherPlayerData.health -= hydraDamage;
       currentPlayerData.hydraActive = 3;
       currentPlayerData.hydraUsed = true;
       break;
   }
   
-  // Apply HYDRA effect if active
+  // HYDRA effect
   if (currentPlayerData.hydraActive > 0) {
-    const hydraDamage = Math.floor(currentNFTStats.attack / 2) + 5;
-    otherPlayerData.health -= hydraDamage;
+    const hydraTickDamage = Math.max(3, Math.floor(attackPower / 2));
+    otherPlayerData.health -= hydraTickDamage;
     currentPlayerData.hydraActive -= 1;
-    damageDealt += hydraDamage;
   }
-  
-  return { damageDealt, healAmount };
 }
 
-// Check if game is over
+// Oyun bitişi kontrolü
 function checkGameOver(game) {
   if (game.playersData[0].health <= 0) {
     game.gameOver = true;
-    return 1; // Second player won
+    return 1;
   }
   if (game.playersData[1].health <= 0) {
     game.gameOver = true;
-    return 0; // First player won
+    return 0;
   }
-  return -1; // Game continues
+  return -1;
 }
 
-// Socket.io connection handling
+// Socket.io bağlantı yönetimi
 io.on('connection', (socket) => {
   console.log(`Player connected: ${socket.id}`);
 
-  // Store player information
   socket.playerIndex = null;
   socket.roomId = null;
   socket.walletAddress = null;
-  socket.nftData = null;
+  socket.selectedNFT = null;
 
-  // Listen for player moves
+  // Oyuncu hareketi dinleyicisi
   socket.on('playerMove', (data) => {
-    // Join game
     if (data.move === 'join') {
-      // Validate wallet address
-      if (!data.walletAddress || !isValidWalletAddress(data.walletAddress)) {
-        socket.emit('errorMessage', 'Invalid wallet address.');
-        return;
-      }
-      
-      // Validate NFT data
-      if (!data.nftData || !validateNFTStats(data.nftData.stats)) {
-        socket.emit('errorMessage', 'Invalid NFT data.');
-        return;
-      }
-      
-      // Store player data
       socket.walletAddress = data.walletAddress;
-      socket.nftData = data.nftData;
+      socket.selectedNFT = data.selectedNFT;
       
-      console.log(`Player ${socket.id} joined with wallet: ${socket.walletAddress} and NFT: ${socket.nftData.name}`);
+      console.log(`Player ${socket.id} joined with wallet: ${socket.walletAddress}`);
+      console.log(`Selected NFT:`, socket.selectedNFT);
       
-      // If player is already in a game, remove from old game
+      // Eski oyun temizliği
       if (socket.roomId) {
         const oldGameId = socket.roomId;
         const oldGame = games.get(oldGameId);
         
         if (oldGame) {
-          // Notify other player
           const otherPlayerId = oldGame.players.find(id => id !== socket.id);
           if (otherPlayerId) {
             io.to(otherPlayerId).emit('gameOver', { winner: 'player' });
           }
           
-          // Clean up game
           games.delete(oldGameId);
           oldGame.players.forEach(id => playerToGame.delete(id));
         }
@@ -242,71 +270,70 @@ io.on('connection', (socket) => {
         socket.playerIndex = null;
       }
       
-      // Check for waiting player
+      // Bekleyen oyuncu kontrolü
       if (waitingPlayer === null) {
         waitingPlayer = socket.id;
         socket.emit('waitingForOpponent');
       } else {
-        // Two players matched, create new game
-        const roomId = `room_${Date.now()}`;
         const waitingPlayerSocket = io.sockets.sockets.get(waitingPlayer);
         
         if (!waitingPlayerSocket) {
-          // Waiting player disconnected
           waitingPlayer = socket.id;
           socket.emit('waitingForOpponent');
           return;
         }
         
+        // Oyun oluştur
+        const roomId = `room_${Date.now()}`;
         const game = createNewGame(
           waitingPlayer, 
-          socket.id, 
-          waitingPlayerSocket.walletAddress, 
+          socket.id,
+          waitingPlayerSocket.walletAddress,
           socket.walletAddress,
-          waitingPlayerSocket.nftData,
-          socket.nftData
+          waitingPlayerSocket.selectedNFT,
+          socket.selectedNFT
         );
+        
         games.set(roomId, game);
         
-        // Add players to room
+        // Oyuncuları odaya ekle
         waitingPlayerSocket.join(roomId);
         socket.join(roomId);
         
-        // Update player info
         waitingPlayerSocket.playerIndex = 0;
         waitingPlayerSocket.roomId = roomId;
         socket.playerIndex = 1;
         socket.roomId = roomId;
         
-        // Map players to game
         playerToGame.set(waitingPlayer, roomId);
         playerToGame.set(socket.id, roomId);
         
-        // Send game start info to both players
+        // Oyun başlama mesajları
         io.to(waitingPlayer).emit('gameStart', {
           yourIndex: 0,
           you: game.playersData[0],
           enemy: game.playersData[1],
-          enemyWalletAddress: socket.walletAddress,
-          enemyNFTData: socket.nftData
+          yourNFT: waitingPlayerSocket.selectedNFT,
+          enemyNFT: socket.selectedNFT,
+          enemyWalletAddress: socket.walletAddress
         });
         
         io.to(socket.id).emit('gameStart', {
           yourIndex: 1,
           you: game.playersData[1],
           enemy: game.playersData[0],
-          enemyWalletAddress: waitingPlayerSocket.walletAddress,
-          enemyNFTData: waitingPlayerSocket.nftData
+          yourNFT: socket.selectedNFT,
+          enemyNFT: waitingPlayerSocket.selectedNFT,
+          enemyWalletAddress: waitingPlayerSocket.walletAddress
         });
         
-        // Clear waiting player
         waitingPlayer = null;
       }
       
-      return; // join handling complete
+      return;
     }
     
-    // Regular game move
+    // Normal oyun hareketi
     const roomId = socket.roomId;
     const playerIndex = socket.playerIndex;
     
@@ -329,124 +356,90 @@ io.on('connection', (socket) => {
     const currentPlayerData = game.playersData[playerIndex];
     const otherPlayerIndex = 1 - playerIndex;
     const otherPlayerData = game.playersData[otherPlayerIndex];
-    const currentNFTStats = game.playerNFTData[playerIndex].stats;
-    const otherNFTStats = game.playerNFTData[otherPlayerIndex].stats;
     
-    // Use provided NFT stats or default to stored ones
-    const moveNFTStats = data.nftStats || currentNFTStats;
-    
-    if (!canPerformMove(data.move, currentPlayerData, moveNFTStats)) {
+    if (!canPerformMove(data.move, currentPlayerData)) {
       socket.emit('errorMessage', 'Not enough mana or invalid move.');
       return;
     }
     
-    // Apply the move
-    const moveResult = applyMove(data.move, currentPlayerData, otherPlayerData, moveNFTStats, otherNFTStats);
+    // Hareketi uygula
+    applyMove(data.move, currentPlayerData, otherPlayerData);
     
-    // Ensure health is not negative
+    // Sağlık kontrolü
     currentPlayerData.health = Math.max(0, currentPlayerData.health);
     otherPlayerData.health = Math.max(0, otherPlayerData.health);
     
-    // Check for game over
+    // Oyun bitişi kontrolü
     const winnerIndex = checkGameOver(game);
     
     if (winnerIndex !== -1) {
-      // Game over, notify players
       io.to(roomId).emit('gameOver', {
         winner: winnerIndex === playerIndex ? 'player' : 'enemy'
       });
       return;
     }
     
-    // Switch turns
+    // Sıra değiştir
     game.turnIndex = otherPlayerIndex;
     
-    // Confirm move to current player
+    // Hareket onayı
     socket.emit('moveConfirmed', {
       you: currentPlayerData,
       enemy: otherPlayerData,
-      move: data.move,
-      damageDealt: moveResult.damageDealt,
-      healAmount: moveResult.healAmount
+      move: data.move
     });
     
-    // Send move info to other player
+    // Diğer oyuncuya bildir
     const otherPlayerId = game.players[otherPlayerIndex];
     io.to(otherPlayerId).emit('enemyMove', {
       you: otherPlayerData,
       enemy: currentPlayerData,
-      move: data.move,
-      damageDealt: moveResult.damageDealt,
-      healAmount: moveResult.healAmount
+      move: data.move
     });
   });
   
-  // Handle chat messages
+  // Chat mesajları
   socket.on('chatMessage', (data) => {
     if (!socket.roomId || socket.playerIndex === null) return;
     
-    // Trim message to max 20 chars
     const trimmedMessage = data.message.substring(0, 20);
     
-    // Send message to other player
     socket.to(socket.roomId).emit('chatMessage', {
       message: trimmedMessage,
       fromIndex: socket.playerIndex
     });
   });
   
-  // Handle disconnections
+  // Bağlantı koparsa
   socket.on('disconnect', () => {
     console.log(`Player disconnected: ${socket.id}`);
     
-    // Was this the waiting player?
     if (waitingPlayer === socket.id) {
       waitingPlayer = null;
     }
     
-    // Was player in a game?
     const roomId = socket.roomId;
     if (roomId && games.has(roomId)) {
       const game = games.get(roomId);
       
-      // Notify other player
       const otherPlayerId = game.players.find(id => id !== socket.id);
       if (otherPlayerId) {
         io.to(otherPlayerId).emit('gameOver', { winner: 'player' });
       }
       
-      // Clean up game
       games.delete(roomId);
       game.players.forEach(id => playerToGame.delete(id));
     }
   });
 });
 
-// API endpoint to validate NFT ownership (optional)
-app.post('/api/validate-nft', async (req, res) => {
-  try {
-    const { walletAddress, tokenId } = req.body;
-    
-    if (!isValidWalletAddress(walletAddress)) {
-      return res.json({ valid: false, message: 'Invalid wallet address' });
-    }
-    
-    // Here you could add actual NFT ownership validation
-    // For now, we'll just return true
-    res.json({ valid: true, message: 'NFT ownership validated' });
-  } catch (error) {
-    console.error('NFT validation error:', error);
-    res.json({ valid: false, message: 'Validation failed' });
-  }
-});
-
-// Serve index.html at root route
+// Ana sayfa
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-// Start server
+// Server başlat
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`NFT PvP Game Server running on port ${PORT}`);
-  console.log(`Supporting NFT Contract: ${NFT_CONTRACT_ADDRESS}`);
+  console.log(`Server running on port ${PORT}`);
+  console.log(`NFT Contract: ${NFT_CONTRACT_ADDRESS}`);
 });
