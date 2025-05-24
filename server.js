@@ -96,7 +96,7 @@ function calculateCriticalHit() {
   return Math.random() < 0.2; // 20% critical hit chance
 }
 
-// Game logic functions (KOMPLE YENİLENDİ)
+// Game logic functions (HASAR NUMARASI DÜZELTİLDİ)
 function createGameState(player1, player2) {
   const p1ActiveKryptomon = getKryptomonData(player1.selectedKryptomon, 0);
   const p2ActiveKryptomon = getKryptomonData(player2.selectedKryptomon, 0);
@@ -121,11 +121,11 @@ function createGameState(player1, player2) {
         kryptomonTeam: p1Team,
         ultimateUsed: false,
         defending: false,
-        defenseCooldown: 0, // YENİ - Defans cooldown
-        defenseEffectTurns: 0, // YENİ - Defans etkisi kalan tur sayısı
+        defenseCooldown: 0,
+        defenseEffectTurns: 0,
         walletAddress: player1.walletAddress,
-        playerName: player1.playerName, // YENİ
-        hasUsedSwitch: false // YENİ - Tur başı switch kontrolü
+        playerName: player1.playerName,
+        hasUsedSwitch: false
       },
       {
         health: p2Stats.health,
@@ -138,11 +138,11 @@ function createGameState(player1, player2) {
         kryptomonTeam: p2Team,
         ultimateUsed: false,
         defending: false,
-        defenseCooldown: 0, // YENİ - Defans cooldown
-        defenseEffectTurns: 0, // YENİ - Defans etkisi kalan tur sayısı
+        defenseCooldown: 0,
+        defenseEffectTurns: 0,
         walletAddress: player2.walletAddress,
-        playerName: player2.playerName, // YENİ
-        hasUsedSwitch: false // YENİ - Tur başı switch kontrolü
+        playerName: player2.playerName,
+        hasUsedSwitch: false
       }
     ],
     currentTurn: 0,
@@ -160,21 +160,22 @@ function processMove(gameState, playerIndex, move, activeKryptomon, noTurnChange
   
   gameState.lastActivity = Date.now();
   
+  // HASAR NUMARASI DÜZELTMESİ - target doğru belirlendi
   let moveResult = {
     damage: 0,
     isCritical: false,
     defenseActivated: false,
     manaGained: 0,
-    target: playerIndex === 0 ? 'enemy' : 'player',
-    switchUsed: false
+    target: playerIndex === 0 ? 'enemy' : 'player', // Hasar KARŞI tarafa gösteriliyor
+    switchUsed: false,
+    attackerIndex: playerIndex, // YENİ - Kim saldırdı
+    targetIndex: 1 - playerIndex // YENİ - Kim hasar aldı
   };
   
   // Start of turn cleanup
   if (!noTurnChange) {
-    // Reset defending status at start of turn
     player.defending = false;
     
-    // Handle defense cooldowns and effects
     if (player.defenseCooldown > 0) {
       player.defenseCooldown--;
     }
@@ -185,11 +186,10 @@ function processMove(gameState, playerIndex, move, activeKryptomon, noTurnChange
       opponent.defenseEffectTurns--;
     }
     
-    // Reset switch usage per turn
     player.hasUsedSwitch = false;
   }
   
-  // Handle Kryptomon switching (GELİŞTİRİLDİ)
+  // Handle Kryptomon switching
   if (move === 'switch' && activeKryptomon !== undefined && 
       activeKryptomon >= 0 && activeKryptomon < 3 && 
       player.kryptomonTeam && player.kryptomonTeam.length > activeKryptomon &&
@@ -210,23 +210,20 @@ function processMove(gameState, playerIndex, move, activeKryptomon, noTurnChange
       player.defense = newStats.defense;
     }
     
-    // Don't change turn if noTurnChange is true
     if (!noTurnChange) {
       gameState.currentTurn = 1 - gameState.currentTurn;
       gameState.turnCount++;
     }
     
     gameState.lastMoveResult = moveResult;
-    return null; // No winner
+    return null;
   }
   
   switch (move) {
     case 'attack':
-      // Attack: +2 mana, güçlendirilmiş hasar (GELİŞTİRİLDİ)
       player.mana = Math.min(player.maxMana, player.mana + 2);
       moveResult.manaGained = 2;
       
-      // Daha güçlü attack damage (1.4x multiplier)
       let attackDamage = Math.max(1, Math.floor(player.attack * 1.4) - (opponent.defenseEffectTurns > 0 ? opponent.defense * 2 : opponent.defense));
       
       const attackCritical = calculateCriticalHit();
@@ -235,7 +232,6 @@ function processMove(gameState, playerIndex, move, activeKryptomon, noTurnChange
         moveResult.isCritical = true;
       }
       
-      // Defense mana bonus
       if (opponent.defenseEffectTurns > 0) {
         opponent.mana = Math.min(opponent.maxMana, opponent.mana + 3);
         moveResult.defenseActivated = true;
@@ -246,14 +242,13 @@ function processMove(gameState, playerIndex, move, activeKryptomon, noTurnChange
       break;
       
     case 'defend':
-      // Defense: Cooldown kontrolü (YENİ SİSTEM)
       if (player.defenseCooldown > 0) {
         console.log('Defense on cooldown!');
-        return null; // Invalid move
+        return null;
       }
       
-      player.defenseEffectTurns = 2; // 2 tur koruma etkisi
-      player.defenseCooldown = 4; // 4 tur cooldown
+      player.defenseEffectTurns = 2;
+      player.defenseCooldown = 4;
       player.health = Math.min(player.maxHealth, player.health + 5);
       break;
       
@@ -268,7 +263,6 @@ function processMove(gameState, playerIndex, move, activeKryptomon, noTurnChange
           moveResult.isCritical = true;
         }
         
-        // Defense mana bonus
         if (opponent.defenseEffectTurns > 0) {
           opponent.mana = Math.min(opponent.maxMana, opponent.mana + 3);
           moveResult.defenseActivated = true;
@@ -290,7 +284,6 @@ function processMove(gameState, playerIndex, move, activeKryptomon, noTurnChange
           moveResult.isCritical = true;
         }
         
-        // Defense mana bonus (ultimate gives +4)
         if (opponent.defenseEffectTurns > 0) {
           opponent.mana = Math.min(opponent.maxMana, opponent.mana + 4);
           moveResult.defenseActivated = true;
@@ -303,10 +296,9 @@ function processMove(gameState, playerIndex, move, activeKryptomon, noTurnChange
       
     case 'surrender':
       gameState.gameActive = false;
-      return 1 - playerIndex; // Opponent wins
+      return 1 - playerIndex;
       
     case 'skip':
-      // Just skip turn
       break;
       
     default:
@@ -317,19 +309,17 @@ function processMove(gameState, playerIndex, move, activeKryptomon, noTurnChange
   // Check for game over
   if (opponent.health <= 0) {
     gameState.gameActive = false;
-    return playerIndex; // Winner
+    return playerIndex;
   }
   
-  // Switch turns (sadece normal hamleler için)
+  // Switch turns
   if (!noTurnChange && move !== 'switch') {
     gameState.currentTurn = 1 - gameState.currentTurn;
     gameState.turnCount++;
   }
   
-  // Store move result for clients
   gameState.lastMoveResult = moveResult;
-  
-  return null; // No winner yet
+  return null;
 }
 
 // Helper function to find game by socket ID
@@ -342,7 +332,7 @@ function findGameBySocket(socketId) {
   return null;
 }
 
-// Socket.io connection handling (KOMPLE YENİLENDİ)
+// Socket.io connection handling (HASAR NUMARASI DÜZELTİLDİ)
 io.on('connection', (socket) => {
   console.log('Player connected:', socket.id);
 
@@ -488,7 +478,7 @@ io.on('connection', (socket) => {
           activeGames.delete(gameId);
           console.log(`Game ${gameId} ended. Winner: ${gameState.players[winner].playerName}`);
         } else {
-          // Send updated game state to both players
+          // HASAR NUMARASI DÜZELTMESİ - doğru moveResult gönderiliyor
           const p1Socket = io.sockets.sockets.get(gameState.players[0].socketId);
           const p2Socket = io.sockets.sockets.get(gameState.players[1].socketId);
           
@@ -496,20 +486,30 @@ io.on('connection', (socket) => {
             const p1ActiveKryptomon = gameState.gameData[0].kryptomonTeam[gameState.gameData[0].activeKryptomon];
             const p2ActiveKryptomon = gameState.gameData[1].kryptomonTeam[gameState.gameData[1].activeKryptomon];
             
+            // Player 1'e moveResult gönder
             p1Socket.emit('moveConfirmed', {
               you: gameState.gameData[0],
               enemy: gameState.gameData[1],
               yourTurn: gameState.currentTurn === 0,
-              moveResult: gameState.lastMoveResult,
+              moveResult: {
+                ...gameState.lastMoveResult,
+                // Player 1 için: target düzeltmesi
+                target: gameState.lastMoveResult.attackerIndex === 0 ? 'enemy' : 'player'
+              },
               yourActiveKryptomon: p1ActiveKryptomon,
               enemyActiveKryptomon: p2ActiveKryptomon
             });
             
+            // Player 2'ye moveResult gönder
             p2Socket.emit('moveConfirmed', {
               you: gameState.gameData[1],
               enemy: gameState.gameData[0],
               yourTurn: gameState.currentTurn === 1,
-              moveResult: gameState.lastMoveResult,
+              moveResult: {
+                ...gameState.lastMoveResult,
+                // Player 2 için: target düzeltmesi
+                target: gameState.lastMoveResult.attackerIndex === 1 ? 'enemy' : 'player'
+              },
               yourActiveKryptomon: p2ActiveKryptomon,
               enemyActiveKryptomon: p1ActiveKryptomon
             });
@@ -522,7 +522,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Emoji handling (YENİ)
+  // Emoji handling
   socket.on('sendEmoji', (data) => {
     try {
       const gameId = findGameBySocket(socket.id);
