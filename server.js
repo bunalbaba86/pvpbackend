@@ -93,7 +93,7 @@ function getKryptomonTeamData(kryptomonTeam) {
 
 // Critical hit calculation
 function calculateCriticalHit() {
-  return Math.random() < 0.15; // 15% critical hit chance
+  return Math.random() < 0.2; // 20% critical hit chance
 }
 
 // Game logic functions
@@ -151,15 +151,23 @@ function processMove(gameState, playerIndex, move, activeKryptomon) {
   const opponent = gameState.gameData[1 - playerIndex];
   
   gameState.lastActivity = Date.now();
+  
+  let moveResult = {
+    damage: 0,
+    isCritical: false,
+    defenseActivated: false,
+    manaGained: 0,
+    target: playerIndex === 0 ? 'enemy' : 'player'
+  };
+  
+  // Reset defending status at start of turn
   player.defending = false;
   
-  let lastDamage = 0;
-  let lastDamageTarget = playerIndex === 0 ? 'enemy' : 'player';
-  
   // Switch active Kryptomon if specified
-  if (move === 'switch' && activeKryptomon !== undefined && 
+  if (activeKryptomon !== undefined && 
       activeKryptomon >= 0 && activeKryptomon < 3 && 
-      player.kryptomonTeam && player.kryptomonTeam.length > activeKryptomon) {
+      player.kryptomonTeam && player.kryptomonTeam.length > activeKryptomon &&
+      activeKryptomon !== player.activeKryptomon) {
     
     player.activeKryptomon = activeKryptomon;
     const newKryptomonData = player.kryptomonTeam[activeKryptomon];
@@ -175,55 +183,75 @@ function processMove(gameState, playerIndex, move, activeKryptomon) {
   
   switch (move) {
     case 'attack':
-      // Attack mana +1 verir ama daha az hasar
-      player.mana = Math.min(player.maxMana, player.mana + 1);
-      let damage = Math.max(1, Math.floor(player.attack * 0.7) - (opponent.defending ? opponent.defense * 2 : opponent.defense));
+      // Attack: +2 mana ama daha az hasar
+      player.mana = Math.min(player.maxMana, player.mana + 2);
+      moveResult.manaGained = 2;
       
-      const isCritical = calculateCriticalHit();
-      if (isCritical) {
-        damage = Math.floor(damage * 1.5);
+      let attackDamage = Math.max(1, Math.floor(player.attack * 0.8) - (opponent.defending ? opponent.defense * 2 : opponent.defense));
+      
+      const attackCritical = calculateCriticalHit();
+      if (attackCritical) {
+        attackDamage = Math.floor(attackDamage * 1.8);
+        moveResult.isCritical = true;
       }
       
-      opponent.health = Math.max(0, opponent.health - damage);
-      lastDamage = damage;
+      // Defense mana bonus
+      if (opponent.defending) {
+        opponent.mana = Math.min(opponent.maxMana, opponent.mana + 3);
+        moveResult.defenseActivated = true;
+      }
+      
+      opponent.health = Math.max(0, opponent.health - attackDamage);
+      moveResult.damage = attackDamage;
       break;
       
     case 'defend':
-      if (player.mana >= 5) {
-        player.mana -= 5;
-        player.defending = true;
-        player.health = Math.min(player.maxHealth, player.health + 5);
-      }
+      // Defense: Manasız, rakip saldırırsa +3 mana (normal) +4 mana (ultimate)
+      player.defending = true;
+      player.health = Math.min(player.maxHealth, player.health + 5);
       break;
       
     case 'skill':
-      if (player.mana >= 2) { // 2 MANA
+      if (player.mana >= 2) { // -2 MANA
         player.mana -= 2;
-        let damage = Math.max(1, Math.floor(player.attack * 1.5) - opponent.defense);
+        let skillDamage = Math.max(1, Math.floor(player.attack * 1.5) - opponent.defense);
         
-        const isCritical = calculateCriticalHit();
-        if (isCritical) {
-          damage = Math.floor(damage * 1.5);
+        const skillCritical = calculateCriticalHit();
+        if (skillCritical) {
+          skillDamage = Math.floor(skillDamage * 1.8);
+          moveResult.isCritical = true;
         }
         
-        opponent.health = Math.max(0, opponent.health - damage);
-        lastDamage = damage;
+        // Defense mana bonus
+        if (opponent.defending) {
+          opponent.mana = Math.min(opponent.maxMana, opponent.mana + 3);
+          moveResult.defenseActivated = true;
+        }
+        
+        opponent.health = Math.max(0, opponent.health - skillDamage);
+        moveResult.damage = skillDamage;
       }
       break;
       
     case 'ultimate':
-      if (player.mana >= 6 && !player.ultimateUsed) { // 6 MANA
+      if (player.mana >= 6) { // -6 MANA
         player.mana -= 6;
-        player.ultimateUsed = true;
-        let damage = Math.max(1, player.attack * 2 - opponent.defense);
+        let ultimateDamage = Math.max(1, Math.floor(player.attack * 2.5) - opponent.defense);
         
-        const isCritical = calculateCriticalHit();
-        if (isCritical) {
-          damage = Math.floor(damage * 1.5);
+        const ultimateCritical = calculateCriticalHit();
+        if (ultimateCritical) {
+          ultimateDamage = Math.floor(ultimateDamage * 1.8);
+          moveResult.isCritical = true;
         }
         
-        opponent.health = Math.max(0, opponent.health - damage);
-        lastDamage = damage;
+        // Defense mana bonus (ultimate gives +4)
+        if (opponent.defending) {
+          opponent.mana = Math.min(opponent.maxMana, opponent.mana + 4);
+          moveResult.defenseActivated = true;
+        }
+        
+        opponent.health = Math.max(0, opponent.health - ultimateDamage);
+        moveResult.damage = ultimateDamage;
       }
       break;
       
@@ -249,6 +277,9 @@ function processMove(gameState, playerIndex, move, activeKryptomon) {
   // Switch turns
   gameState.currentTurn = 1 - gameState.currentTurn;
   gameState.turnCount++;
+  
+  // Store move result for clients
+  gameState.lastMoveResult = moveResult;
   
   return null; // No winner yet
 }
@@ -297,6 +328,7 @@ io.on('connection', (socket) => {
             const p1ActiveKryptomon = gameState.gameData[0].kryptomonTeam[0];
             const p2ActiveKryptomon = gameState.gameData[1].kryptomonTeam[0];
             
+            // Notify both players
             p1Socket.emit('gameStart', {
               yourIndex: 0,
               you: gameState.gameData[0],
@@ -345,7 +377,8 @@ io.on('connection', (socket) => {
           return;
         }
         
-        if (gameState.currentTurn !== playerIndex && data.move !== 'switch') {
+        // Allow kryptomon switching anytime, but other moves only on your turn
+        if (gameState.currentTurn !== playerIndex && data.move !== 'switch' && data.activeKryptomon === undefined) {
           socket.emit('errorMessage', 'Not your turn');
           return;
         }
@@ -378,13 +411,16 @@ io.on('connection', (socket) => {
           const currentActiveKryptomon0 = gameState.gameData[0].kryptomonTeam[gameState.gameData[0].activeKryptomon];
           const currentActiveKryptomon1 = gameState.gameData[1].kryptomonTeam[gameState.gameData[1].activeKryptomon];
           
+          // Send updated game state with move result
           if (p1Socket) {
             p1Socket.emit('moveConfirmed', {
               you: gameState.gameData[0],
               enemy: gameState.gameData[1],
               yourTurn: gameState.currentTurn === 0,
               yourActiveKryptomon: currentActiveKryptomon0,
-              enemyActiveKryptomon: currentActiveKryptomon1
+              enemyActiveKryptomon: currentActiveKryptomon1,
+              moveResult: gameState.lastMoveResult,
+              turnCount: gameState.turnCount
             });
           }
           
@@ -394,7 +430,9 @@ io.on('connection', (socket) => {
               enemy: gameState.gameData[0],
               yourTurn: gameState.currentTurn === 1,
               yourActiveKryptomon: currentActiveKryptomon1,
-              enemyActiveKryptomon: currentActiveKryptomon0
+              enemyActiveKryptomon: currentActiveKryptomon0,
+              moveResult: gameState.lastMoveResult,
+              turnCount: gameState.turnCount
             });
           }
         }
@@ -405,29 +443,33 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('chatMessage', (data) => {
+  // Chat/Emoji system
+  socket.on('sendEmoji', (data) => {
     try {
       const gameId = findGameBySocket(socket.id);
       if (gameId) {
         const gameState = activeGames.get(gameId);
         const playerIndex = gameState.players.findIndex(p => p.socketId === socket.id);
         
-        socket.to(gameId).emit('chatMessage', {
-          message: data.message,
-          fromIndex: playerIndex,
+        // Send emoji to opponent
+        socket.to(gameId).emit('emojiReceived', {
+          emoji: data.emoji,
+          fromPlayer: playerIndex,
           timestamp: Date.now()
         });
       }
     } catch (error) {
-      console.error('Error processing chat message:', error);
+      console.error('Error processing emoji:', error);
     }
   });
 
   socket.on('disconnect', () => {
     console.log('Player disconnected:', socket.id);
     
+    // Remove from waiting list
     waitingPlayers = waitingPlayers.filter(p => p.socketId !== socket.id);
     
+    // Handle active games
     const gameId = findGameBySocket(socket.id);
     if (gameId) {
       const gameState = activeGames.get(gameId);
@@ -501,6 +543,8 @@ app.get('/debug', (req, res) => {
 // Start server
 server.listen(PORT, () => {
   console.log(`Kryptomon Battle Server running on port ${PORT}`);
+  console.log(`Health check: http://localhost:${PORT}/health`);
+  console.log(`Debug info: http://localhost:${PORT}/debug`);
 });
 
 // Cleanup inactive games periodically
@@ -512,10 +556,26 @@ setInterval(() => {
     if (now - gameState.lastActivity > 30 * 60 * 1000) {
       activeGames.delete(gameId);
       cleanedCount++;
+      console.log(`Cleaned up inactive game: ${gameId}`);
     }
   }
   
   if (cleanedCount > 0) {
-    console.log(`Cleaned up ${cleanedCount} inactive games`);
+    console.log(`Cleaned up ${cleanedCount} inactive games. Active games: ${activeGames.size}`);
   }
 }, 5 * 60 * 1000);
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('SIGTERM received, shutting down gracefully');
+  server.close(() => {
+    console.log('Process terminated');
+  });
+});
+
+process.on('SIGINT', () => {
+  console.log('SIGINT received, shutting down gracefully');
+  server.close(() => {
+    console.log('Process terminated');
+  });
+});
