@@ -96,7 +96,7 @@ function calculateCriticalHit() {
   return Math.random() < 0.2; // 20% critical hit chance
 }
 
-// Game logic functions (HASAR NUMARASI DÜZELTİLDİ)
+// Game logic functions
 function createGameState(player1, player2) {
   const p1ActiveKryptomon = getKryptomonData(player1.selectedKryptomon, 0);
   const p2ActiveKryptomon = getKryptomonData(player2.selectedKryptomon, 0);
@@ -160,16 +160,15 @@ function processMove(gameState, playerIndex, move, activeKryptomon, noTurnChange
   
   gameState.lastActivity = Date.now();
   
-  // HASAR NUMARASI DÜZELTMESİ - target doğru belirlendi
   let moveResult = {
     damage: 0,
     isCritical: false,
     defenseActivated: false,
     manaGained: 0,
-    target: playerIndex === 0 ? 'enemy' : 'player', // Hasar KARŞI tarafa gösteriliyor
+    target: playerIndex === 0 ? 'enemy' : 'player',
     switchUsed: false,
-    attackerIndex: playerIndex, // YENİ - Kim saldırdı
-    targetIndex: 1 - playerIndex // YENİ - Kim hasar aldı
+    attackerIndex: playerIndex,
+    targetIndex: 1 - playerIndex
   };
   
   // Start of turn cleanup
@@ -332,7 +331,7 @@ function findGameBySocket(socketId) {
   return null;
 }
 
-// Socket.io connection handling (HASAR NUMARASI DÜZELTİLDİ)
+// Socket.io connection handling
 io.on('connection', (socket) => {
   console.log('Player connected:', socket.id);
 
@@ -478,7 +477,6 @@ io.on('connection', (socket) => {
           activeGames.delete(gameId);
           console.log(`Game ${gameId} ended. Winner: ${gameState.players[winner].playerName}`);
         } else {
-          // HASAR NUMARASI DÜZELTMESİ - doğru moveResult gönderiliyor
           const p1Socket = io.sockets.sockets.get(gameState.players[0].socketId);
           const p2Socket = io.sockets.sockets.get(gameState.players[1].socketId);
           
@@ -486,28 +484,24 @@ io.on('connection', (socket) => {
             const p1ActiveKryptomon = gameState.gameData[0].kryptomonTeam[gameState.gameData[0].activeKryptomon];
             const p2ActiveKryptomon = gameState.gameData[1].kryptomonTeam[gameState.gameData[1].activeKryptomon];
             
-            // Player 1'e moveResult gönder
             p1Socket.emit('moveConfirmed', {
               you: gameState.gameData[0],
               enemy: gameState.gameData[1],
               yourTurn: gameState.currentTurn === 0,
               moveResult: {
                 ...gameState.lastMoveResult,
-                // Player 1 için: target düzeltmesi
                 target: gameState.lastMoveResult.attackerIndex === 0 ? 'enemy' : 'player'
               },
               yourActiveKryptomon: p1ActiveKryptomon,
               enemyActiveKryptomon: p2ActiveKryptomon
             });
             
-            // Player 2'ye moveResult gönder
             p2Socket.emit('moveConfirmed', {
               you: gameState.gameData[1],
               enemy: gameState.gameData[0],
               yourTurn: gameState.currentTurn === 1,
               moveResult: {
                 ...gameState.lastMoveResult,
-                // Player 2 için: target düzeltmesi
                 target: gameState.lastMoveResult.attackerIndex === 1 ? 'enemy' : 'player'
               },
               yourActiveKryptomon: p2ActiveKryptomon,
