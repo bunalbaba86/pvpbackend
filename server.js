@@ -21,7 +21,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 let waitingPlayers = [];
 let activeGames = new Map();
 
-// Kryptomon stats calculation
+// Kryptomon stats calculation (frontend ile aynı)
 function calculateKryptomonStats(tokenId) {
   const tokenNum = parseInt(tokenId) || 0;
   
@@ -38,62 +38,95 @@ function calculateKryptomonStats(tokenId) {
   };
 }
 
-// Safe function to get Kryptomon data
+// Safe function to get Kryptomon data (GELİŞTİRİLDİ)
 function getKryptomonData(kryptomonTeam, index = 0) {
-  console.log('Getting Kryptomon data:', { kryptomonTeam, index });
+  console.log('Getting Kryptomon data:', { 
+    teamLength: kryptomonTeam ? kryptomonTeam.length : 0, 
+    index 
+  });
   
   if (!kryptomonTeam || !Array.isArray(kryptomonTeam) || kryptomonTeam.length === 0) {
     console.log('No Kryptomon team found, creating default');
     return {
       tokenId: '978',
       name: 'Default Kryptomon',
-      image: 'default-kryptomon.png'
+      image: 'https://robohash.org/kryptomon978?set=set4&size=300x300&bgset=bg1',
+      stats: calculateKryptomonStats('978')
     };
   }
   
   const kryptomon = kryptomonTeam[index];
-  console.log('Selected Kryptomon:', kryptomon);
+  console.log('Selected Kryptomon at index', index, ':', kryptomon);
   
   if (!kryptomon) {
     console.log('Kryptomon at index not found, using first available');
-    return kryptomonTeam[0]?.nft || kryptomonTeam[0] || {
+    const fallback = kryptomonTeam[0];
+    return fallback?.nft || fallback || {
       tokenId: '978',
       name: 'Default Kryptomon',
-      image: 'default-kryptomon.png'
+      image: 'https://robohash.org/kryptomon978?set=set4&size=300x300&bgset=bg1',
+      stats: calculateKryptomonStats('978')
     };
   }
   
   // Handle different data structures
   if (kryptomon.nft) {
-    return kryptomon.nft;
+    return {
+      ...kryptomon.nft,
+      stats: calculateKryptomonStats(kryptomon.nft.tokenId)
+    };
   } else if (kryptomon.tokenId) {
-    return kryptomon;
+    return {
+      ...kryptomon,
+      stats: calculateKryptomonStats(kryptomon.tokenId)
+    };
   } else {
     console.log('Invalid Kryptomon structure, using default');
     return {
       tokenId: '978',
       name: 'Default Kryptomon',
-      image: 'default-kryptomon.png'
+      image: 'https://robohash.org/kryptomon978?set=set4&size=300x300&bgset=bg1',
+      stats: calculateKryptomonStats('978')
     };
   }
 }
 
-// Game logic functions
+// Get full Kryptomon team data
+function getKryptomonTeamData(kryptomonTeam) {
+  if (!kryptomonTeam || !Array.isArray(kryptomonTeam)) {
+    return [];
+  }
+  
+  return kryptomonTeam.map((kryptomon, index) => {
+    return getKryptomonData(kryptomonTeam, index);
+  });
+}
+
+// Game logic functions (GELİŞTİRİLDİ)
 function createGameState(player1, player2) {
   console.log('Creating game state for players:', {
     p1: player1.walletAddress,
     p2: player2.walletAddress,
-    p1Kryptomon: player1.selectedKryptomon,
-    p2Kryptomon: player2.selectedKryptomon
+    p1KryptomonCount: player1.selectedKryptomon ? player1.selectedKryptomon.length : 0,
+    p2KryptomonCount: player2.selectedKryptomon ? player2.selectedKryptomon.length : 0
   });
   
-  const p1Kryptomon = getKryptomonData(player1.selectedKryptomon, 0);
-  const p2Kryptomon = getKryptomonData(player2.selectedKryptomon, 0);
+  const p1ActiveKryptomon = getKryptomonData(player1.selectedKryptomon, 0);
+  const p2ActiveKryptomon = getKryptomonData(player2.selectedKryptomon, 0);
   
-  const p1Stats = calculateKryptomonStats(p1Kryptomon.tokenId);
-  const p2Stats = calculateKryptomonStats(p2Kryptomon.tokenId);
+  const p1Stats = p1ActiveKryptomon.stats || calculateKryptomonStats(p1ActiveKryptomon.tokenId);
+  const p2Stats = p2ActiveKryptomon.stats || calculateKryptomonStats(p2ActiveKryptomon.tokenId);
   
-  console.log('Calculated stats:', { p1Stats, p2Stats });
+  // Get full team data
+  const p1Team = getKryptomonTeamData(player1.selectedKryptomon);
+  const p2Team = getKryptomonTeamData(player2.selectedKryptomon);
+  
+  console.log('Calculated stats and teams:', { 
+    p1Stats, 
+    p2Stats, 
+    p1TeamSize: p1Team.length, 
+    p2TeamSize: p2Team.length 
+  });
   
   return {
     players: [player1, player2],
@@ -106,9 +139,10 @@ function createGameState(player1, player2) {
         attack: p1Stats.attack,
         defense: p1Stats.defense,
         activeKryptomon: 0,
-        kryptomonTeam: player1.selectedKryptomon || [],
+        kryptomonTeam: p1Team,
         ultimateUsed: false,
-        defending: false
+        defending: false,
+        walletAddress: player1.walletAddress
       },
       {
         health: p2Stats.health,
@@ -118,9 +152,10 @@ function createGameState(player1, player2) {
         attack: p2Stats.attack,
         defense: p2Stats.defense,
         activeKryptomon: 0,
-        kryptomonTeam: player2.selectedKryptomon || [],
+        kryptomonTeam: p2Team,
         ultimateUsed: false,
-        defending: false
+        defending: false,
+        walletAddress: player2.walletAddress
       }
     ],
     currentTurn: 0,
@@ -149,16 +184,22 @@ function processMove(gameState, playerIndex, move, activeKryptomon) {
       player.kryptomonTeam && 
       player.kryptomonTeam.length > activeKryptomon) {
     
+    console.log('Switching to Kryptomon index:', activeKryptomon);
     player.activeKryptomon = activeKryptomon;
-    const newKryptomonData = getKryptomonData(player.kryptomonTeam, activeKryptomon);
+    
+    const newKryptomonData = player.kryptomonTeam[activeKryptomon];
     
     if (newKryptomonData && newKryptomonData.tokenId) {
-      const newStats = calculateKryptomonStats(newKryptomonData.tokenId);
+      const newStats = newKryptomonData.stats || calculateKryptomonStats(newKryptomonData.tokenId);
       player.health = newStats.health;
       player.maxHealth = newStats.health;
       player.attack = newStats.attack;
       player.defense = newStats.defense;
-      console.log('Switched to new Kryptomon:', { activeKryptomon, newStats });
+      console.log('Switched to new Kryptomon:', { 
+        activeKryptomon, 
+        newStats, 
+        name: newKryptomonData.name 
+      });
     }
   }
   
@@ -168,7 +209,9 @@ function processMove(gameState, playerIndex, move, activeKryptomon) {
         player.mana -= 10;
         let damage = Math.max(1, player.attack - (opponent.defending ? opponent.defense * 2 : opponent.defense));
         opponent.health = Math.max(0, opponent.health - damage);
-        console.log('Attack damage:', damage);
+        console.log('Attack damage:', damage, 'Opponent health:', opponent.health);
+      } else {
+        console.log('Not enough mana for attack');
       }
       break;
       
@@ -177,7 +220,9 @@ function processMove(gameState, playerIndex, move, activeKryptomon) {
         player.mana -= 5;
         player.defending = true;
         player.health = Math.min(player.maxHealth, player.health + 5);
-        console.log('Player defending and healing');
+        console.log('Player defending and healing, new health:', player.health);
+      } else {
+        console.log('Not enough mana for defend');
       }
       break;
       
@@ -186,7 +231,9 @@ function processMove(gameState, playerIndex, move, activeKryptomon) {
         player.mana -= 20;
         let damage = Math.max(1, Math.floor(player.attack * 1.5) - opponent.defense);
         opponent.health = Math.max(0, opponent.health - damage);
-        console.log('Skill damage:', damage);
+        console.log('Skill damage:', damage, 'Opponent health:', opponent.health);
+      } else {
+        console.log('Not enough mana for skill');
       }
       break;
       
@@ -196,12 +243,15 @@ function processMove(gameState, playerIndex, move, activeKryptomon) {
       break;
       
     case 'hydra':
+    case 'ultimate':
       if (player.mana >= 30 && !player.ultimateUsed) {
         player.mana -= 30;
         player.ultimateUsed = true;
         let damage = Math.max(1, player.attack * 2 - opponent.defense);
         opponent.health = Math.max(0, opponent.health - damage);
-        console.log('Ultimate attack damage:', damage);
+        console.log('Ultimate attack damage:', damage, 'Opponent health:', opponent.health);
+      } else {
+        console.log('Cannot use ultimate - mana:', player.mana, 'already used:', player.ultimateUsed);
       }
       break;
       
@@ -227,13 +277,18 @@ function processMove(gameState, playerIndex, move, activeKryptomon) {
   return null; // No winner yet
 }
 
-// Socket.io connection handling
+// Socket.io connection handling (GELİŞTİRİLDİ)
 io.on('connection', (socket) => {
   console.log('Player connected:', socket.id);
 
   socket.on('playerMove', (data) => {
     try {
-      console.log('Received player move:', data);
+      console.log('Received player move:', {
+        move: data.move,
+        walletAddress: data.walletAddress,
+        kryptomonCount: data.selectedKryptomon ? data.selectedKryptomon.length : 0,
+        activeKryptomon: data.activeKryptomon
+      });
       
       if (data.move === 'join') {
         // Player wants to join a game
@@ -243,7 +298,10 @@ io.on('connection', (socket) => {
           selectedKryptomon: data.selectedKryptomon || []
         };
 
-        console.log('Player joining:', playerData);
+        console.log('Player joining with team:', playerData.selectedKryptomon.map(k => ({
+          name: k.nft ? k.nft.name : k.name,
+          tokenId: k.nft ? k.nft.tokenId : k.tokenId
+        })));
 
         // Remove player from waiting list if already there
         waitingPlayers = waitingPlayers.filter(p => p.socketId !== socket.id);
@@ -271,26 +329,36 @@ io.on('connection', (socket) => {
             p1Socket.join(gameId);
             p2Socket.join(gameId);
             
-            const p1Kryptomon = getKryptomonData(player1.selectedKryptomon, 0);
-            const p2Kryptomon = getKryptomonData(player2.selectedKryptomon, 0);
+            const p1ActiveKryptomon = gameState.gameData[0].kryptomonTeam[0];
+            const p2ActiveKryptomon = gameState.gameData[1].kryptomonTeam[0];
             
-            // Send game start data
+            console.log('Sending game start data:', {
+              p1Active: p1ActiveKryptomon ? p1ActiveKryptomon.name : 'Unknown',
+              p2Active: p2ActiveKryptomon ? p2ActiveKryptomon.name : 'Unknown'
+            });
+            
+            // Send game start data to Player 1
             p1Socket.emit('gameStart', {
               yourIndex: 0,
               you: gameState.gameData[0],
               enemy: gameState.gameData[1],
               yourTurn: gameState.currentTurn === 0,
-              enemyNFT: p2Kryptomon,
-              yourNFT: p1Kryptomon
+              enemyNFT: p2ActiveKryptomon,
+              yourNFT: p1ActiveKryptomon,
+              enemyKryptomonTeam: gameState.gameData[1].kryptomonTeam,
+              yourKryptomonTeam: gameState.gameData[0].kryptomonTeam
             });
             
+            // Send game start data to Player 2
             p2Socket.emit('gameStart', {
               yourIndex: 1,
               you: gameState.gameData[1],
               enemy: gameState.gameData[0],
               yourTurn: gameState.currentTurn === 1,
-              enemyNFT: p1Kryptomon,
-              yourNFT: p2Kryptomon
+              enemyNFT: p1ActiveKryptomon,
+              yourNFT: p2ActiveKryptomon,
+              enemyKryptomonTeam: gameState.gameData[0].kryptomonTeam,
+              yourKryptomonTeam: gameState.gameData[1].kryptomonTeam
             });
             
             console.log(`Game started: ${gameId}`);
@@ -336,21 +404,36 @@ io.on('connection', (socket) => {
           const winnerSocket = io.sockets.sockets.get(gameState.players[winner].socketId);
           const loserSocket = io.sockets.sockets.get(gameState.players[1 - winner].socketId);
           
-          if (winnerSocket) winnerSocket.emit('gameOver', { winner: 'player' });
-          if (loserSocket) loserSocket.emit('gameOver', { winner: 'enemy' });
+          if (winnerSocket) {
+            winnerSocket.emit('gameOver', { 
+              winner: 'player',
+              message: 'Victory! You defeated your opponent!'
+            });
+          }
+          if (loserSocket) {
+            loserSocket.emit('gameOver', { 
+              winner: 'enemy',
+              message: 'Defeat! Your opponent was stronger this time.'
+            });
+          }
           
           activeGames.delete(gameId);
           console.log(`Game ended: ${gameId}, Winner: Player ${winner}`);
         } else {
-          // Continue game
+          // Continue game - send updated game state
           const p1Socket = io.sockets.sockets.get(gameState.players[0].socketId);
           const p2Socket = io.sockets.sockets.get(gameState.players[1].socketId);
+          
+          const currentActiveKryptomon0 = gameState.gameData[0].kryptomonTeam[gameState.gameData[0].activeKryptomon];
+          const currentActiveKryptomon1 = gameState.gameData[1].kryptomonTeam[gameState.gameData[1].activeKryptomon];
           
           if (p1Socket) {
             p1Socket.emit('moveConfirmed', {
               you: gameState.gameData[0],
               enemy: gameState.gameData[1],
-              yourTurn: gameState.currentTurn === 0
+              yourTurn: gameState.currentTurn === 0,
+              yourActiveKryptomon: currentActiveKryptomon0,
+              enemyActiveKryptomon: currentActiveKryptomon1
             });
           }
           
@@ -358,7 +441,9 @@ io.on('connection', (socket) => {
             p2Socket.emit('moveConfirmed', {
               you: gameState.gameData[1],
               enemy: gameState.gameData[0],
-              yourTurn: gameState.currentTurn === 1
+              yourTurn: gameState.currentTurn === 1,
+              yourActiveKryptomon: currentActiveKryptomon1,
+              enemyActiveKryptomon: currentActiveKryptomon0
             });
           }
         }
@@ -366,6 +451,7 @@ io.on('connection', (socket) => {
     } catch (error) {
       console.error('Error processing move:', error);
       console.error('Error stack:', error.stack);
+      console.error('Data received:', data);
       socket.emit('errorMessage', 'Error processing move: ' + error.message);
     }
   });
@@ -379,7 +465,8 @@ io.on('connection', (socket) => {
         
         socket.to(gameId).emit('chatMessage', {
           message: data.message,
-          fromIndex: playerIndex
+          fromIndex: playerIndex,
+          timestamp: Date.now()
         });
       }
     } catch (error) {
@@ -402,10 +489,15 @@ io.on('connection', (socket) => {
         if (otherPlayer) {
           const otherSocket = io.sockets.sockets.get(otherPlayer.socketId);
           if (otherSocket) {
-            otherSocket.emit('gameOver', { winner: 'player', reason: 'opponent_disconnected' });
+            otherSocket.emit('gameOver', { 
+              winner: 'player', 
+              reason: 'opponent_disconnected',
+              message: 'Your opponent disconnected. You win by default!'
+            });
           }
         }
         activeGames.delete(gameId);
+        console.log(`Game ${gameId} ended due to disconnection`);
       }
     }
   });
@@ -426,25 +518,35 @@ app.get('/health', (req, res) => {
     status: 'OK',
     activeGames: activeGames.size,
     waitingPlayers: waitingPlayers.length,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime()
   });
 });
 
-// Debug endpoint
+// Debug endpoint (GELİŞTİRİLDİ)
 app.get('/debug', (req, res) => {
   res.json({
     activeGames: Array.from(activeGames.keys()),
     waitingPlayers: waitingPlayers.map(p => ({
       socketId: p.socketId,
       walletAddress: p.walletAddress,
-      hasKryptomon: !!p.selectedKryptomon && p.selectedKryptomon.length > 0
+      kryptomonCount: p.selectedKryptomon ? p.selectedKryptomon.length : 0
     })),
     gamesDetail: Array.from(activeGames.entries()).map(([id, game]) => ({
       gameId: id,
-      players: game.players.map(p => p.walletAddress),
+      players: game.players.map(p => ({
+        wallet: p.walletAddress,
+        kryptomonCount: p.selectedKryptomon ? p.selectedKryptomon.length : 0
+      })),
       currentTurn: game.currentTurn,
       gameActive: game.gameActive,
-      turnCount: game.turnCount
+      turnCount: game.turnCount,
+      playerStats: game.gameData.map(data => ({
+        health: data.health,
+        mana: data.mana,
+        activeKryptomon: data.activeKryptomon,
+        kryptomonTeamSize: data.kryptomonTeam ? data.kryptomonTeam.length : 0
+      }))
     }))
   });
 });
@@ -459,11 +561,33 @@ server.listen(PORT, () => {
 // Cleanup inactive games periodically
 setInterval(() => {
   const now = Date.now();
+  let cleanedCount = 0;
+  
   for (const [gameId, gameState] of activeGames) {
     // Remove games older than 30 minutes
     if (now - gameState.lastActivity > 30 * 60 * 1000) {
       activeGames.delete(gameId);
+      cleanedCount++;
       console.log(`Cleaned up inactive game: ${gameId}`);
     }
   }
+  
+  if (cleanedCount > 0) {
+    console.log(`Cleaned up ${cleanedCount} inactive games. Active games: ${activeGames.size}`);
+  }
 }, 5 * 60 * 1000); // Check every 5 minutes
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('SIGTERM received, shutting down gracefully');
+  server.close(() => {
+    console.log('Process terminated');
+  });
+});
+
+process.on('SIGINT', () => {
+  console.log('SIGINT received, shutting down gracefully');
+  server.close(() => {
+    console.log('Process terminated');
+  });
+});
