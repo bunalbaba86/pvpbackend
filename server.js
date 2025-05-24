@@ -2,7 +2,6 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
-const axios = require('axios'); // NFT API çağrıları için
 
 // Express and Socket.io setup
 const app = express();
@@ -71,14 +70,18 @@ function calculateNFTStats(tokenId, metadata = null) {
   };
 }
 
+// Wallet address validation
+function isValidWalletAddress(address) {
+  return /^0x[a-fA-F0-9]{40}$/.test(address);
+}
+
 // NFT sahipliği doğrulama endpoint'i
 app.get('/verify-nft/:address/:tokenId', async (req, res) => {
   try {
     const { address, tokenId } = req.params;
     
-    // Burada gerçek blockchain verification yapılabilir
-    // Şimdilik basit doğrulama
-    if (!address || !tokenId) {
+    // Basit validation
+    if (!address || !tokenId || !isValidWalletAddress(address)) {
       return res.json({ valid: false, message: 'Invalid parameters' });
     }
     
@@ -105,8 +108,8 @@ app.get('/nft-metadata/:tokenId', async (req, res) => {
     
     // Demo metadata döndür
     const metadata = {
-      name: `NFT #${tokenId}`,
-      description: `This is NFT number ${tokenId} from the collection`,
+      name: `Warrior #${tokenId}`,
+      description: `This is NFT warrior number ${tokenId} from the collection`,
       image: `https://picsum.photos/300/300?random=${tokenId}`,
       attributes: [
         { trait_type: "Power", value: (parseInt(tokenId) * 7) % 100 },
@@ -373,6 +376,7 @@ io.on('connection', (socket) => {
     const winnerIndex = checkGameOver(game);
     
     if (winnerIndex !== -1) {
+      // Oyun bitti
       io.to(roomId).emit('gameOver', {
         winner: winnerIndex === playerIndex ? 'player' : 'enemy'
       });
@@ -389,7 +393,7 @@ io.on('connection', (socket) => {
       move: data.move
     });
     
-    // Diğer oyuncuya bildir
+    // Karşı oyuncuya hareket bilgisi
     const otherPlayerId = game.players[otherPlayerIndex];
     io.to(otherPlayerId).emit('enemyMove', {
       you: otherPlayerData,
@@ -410,14 +414,16 @@ io.on('connection', (socket) => {
     });
   });
   
-  // Bağlantı koparsa
+  // Bağlantı kopması
   socket.on('disconnect', () => {
     console.log(`Player disconnected: ${socket.id}`);
     
+    // Bekleyen oyuncu kontrolü
     if (waitingPlayer === socket.id) {
       waitingPlayer = null;
     }
     
+    // Oyun temizliği
     const roomId = socket.roomId;
     if (roomId && games.has(roomId)) {
       const game = games.get(roomId);
@@ -433,13 +439,18 @@ io.on('connection', (socket) => {
   });
 });
 
-// Ana sayfa
+// Serve index.html at root route
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-// Server başlat
+// Route handler for pve.html
+app.get('/pve.html', (req, res) => {
+  res.sendFile(path.join(__dirname, 'index.html'));
+});
+
+// Start server
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`NFT Contract: ${NFT_CONTRACT_ADDRESS}`);
+  console.log(`NFT PvP Server running on port ${PORT}`);
+  console.log(`Supporting NFT contract: ${NFT_CONTRACT_ADDRESS}`);
 });
