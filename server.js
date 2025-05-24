@@ -17,64 +17,24 @@ app.use(express.json());
 // Port configuration
 const PORT = process.env.PORT || 8080;
 
-// In-memory user database
-const users = new Map();
-
 // Game states
 let waitingPlayer = null;
 const games = new Map(); // roomId -> gameState
 const playerToGame = new Map(); // playerId -> roomId
 
-// Basic user authentication
-app.post('/register', (req, res) => {
-  const { username, password } = req.body;
-  
-  // Simple validation
-  if (!username || !password) {
-    return res.json({ success: false, message: 'Username and password are required' });
-  }
-  
-  // Check if username already exists
-  if (users.has(username)) {
-    return res.json({ success: false, message: 'Username already exists' });
-  }
-  
-  // Store user (in production, you would hash the password)
-  users.set(username, { username, password });
-  
-  res.json({ success: true, message: 'Registration successful' });
-});
-
-app.post('/login', (req, res) => {
-  const { username, password } = req.body;
-  
-  // Simple validation
-  if (!username || !password) {
-    return res.json({ success: false, message: 'Username and password are required' });
-  }
-  
-  // Check if user exists and password matches
-  const user = users.get(username);
-  if (!user || user.password !== password) {
-    return res.json({ success: false, message: 'Invalid username or password' });
-  }
-  
-  // Return user info (without password)
-  res.json({ 
-    success: true, 
-    message: 'Login successful',
-    user: { username: user.username }
-  });
-});
+// Wallet address validation
+function isValidWalletAddress(address) {
+  return /^0x[a-fA-F0-9]{40}$/.test(address);
+}
 
 // Create a new game
-function createNewGame(player1Id, player2Id, player1Username, player2Username) {
+function createNewGame(player1Id, player2Id, player1WalletAddress, player2WalletAddress) {
   // Random initial health (200-250)
   const initialHealth = Math.floor(Math.random() * 51) + 200;
   
   return {
     players: [player1Id, player2Id],
-    playerUsernames: [player1Username, player2Username],
+    playerWalletAddresses: [player1WalletAddress, player2WalletAddress],
     turnIndex: 0, // First player's turn
     playersData: [
       { health: initialHealth, mana: 100, hydraActive: 0, hydraUsed: false }, // First player
@@ -152,15 +112,21 @@ io.on('connection', (socket) => {
   // Store player information
   socket.playerIndex = null;
   socket.roomId = null;
-  socket.username = null;
+  socket.walletAddress = null;
 
   // Listen for player moves
   socket.on('playerMove', (data) => {
     // Join game
     if (data.move === 'join') {
-      // Store username from client data
-      socket.username = data.username || "Player";
-      console.log(`Player ${socket.id} joined with username: ${socket.username}`);
+      // Validate wallet address
+      if (!data.walletAddress || !isValidWalletAddress(data.walletAddress)) {
+        socket.emit('errorMessage', 'Invalid wallet address. Please connect your MetaMask wallet.');
+        return;
+      }
+
+      // Store wallet address from client data
+      socket.walletAddress = data.walletAddress;
+      console.log(`Player ${socket.id} joined with wallet: ${socket.walletAddress}`);
       
       // If player is already in a game, remove from old game
       if (socket.roomId) {
@@ -200,10 +166,17 @@ io.on('connection', (socket) => {
           return;
         }
         
-        const waitingPlayerUsername = waitingPlayerSocket.username || "Player 1";
-        const currentPlayerUsername = socket.username || "Player 2";
+        const waitingPlayerWallet = waitingPlayerSocket.walletAddress;
+        const currentPlayerWallet = socket.walletAddress;
         
-        const game = createNewGame(waitingPlayer, socket.id, waitingPlayerUsername, currentPlayerUsername);
+        // Check if same wallet tries to play against itself
+        if (waitingPlayerWallet === currentPlayerWallet) {
+          socket.emit('errorMessage', 'Cannot play against yourself with the same wallet.');
+          socket.emit('waitingForOpponent');
+          return;
+        }
+        
+        const game = createNewGame(waitingPlayer, socket.id, waitingPlayerWallet, currentPlayerWallet);
         games.set(roomId, game);
         
         // Add players to room
@@ -243,7 +216,7 @@ io.on('connection', (socket) => {
           initialHealth: game.initialHealth,
           playerAvatar: playerAvatars[playerAvatarIndex],
           enemyAvatar: enemyAvatars[enemyAvatarIndex],
-          enemyUsername: currentPlayerUsername
+          enemyWalletAddress: currentPlayerWallet
         });
         
         io.to(socket.id).emit('gameStart', {
@@ -253,7 +226,7 @@ io.on('connection', (socket) => {
           initialHealth: game.initialHealth,
           playerAvatar: enemyAvatars[enemyAvatarIndex],
           enemyAvatar: playerAvatars[playerAvatarIndex],
-          enemyUsername: waitingPlayerUsername
+          enemyWalletAddress: waitingPlayerWallet
         });
         
         // Clear waiting player
@@ -269,6 +242,12 @@ io.on('connection', (socket) => {
     
     if (!roomId || playerIndex === null) {
       socket.emit('errorMessage', 'You are not in a game room.');
+      return;
+    }
+    
+    // Validate wallet address for all moves
+    if (!socket.walletAddress || !isValidWalletAddress(socket.walletAddress)) {
+      socket.emit('errorMessage', 'Invalid wallet address. Please reconnect your wallet.');
       return;
     }
     
@@ -333,6 +312,11 @@ io.on('connection', (socket) => {
   socket.on('chatMessage', (data) => {
     if (!socket.roomId || socket.playerIndex === null) return;
     
+    // Validate wallet address for chat
+    if (!socket.walletAddress || !isValidWalletAddress(socket.walletAddress)) {
+      return;
+    }
+    
     // Trim message to max 20 chars
     const trimmedMessage = data.message.substring(0, 20);
     
@@ -345,7 +329,7 @@ io.on('connection', (socket) => {
   
   // Handle disconnections
   socket.on('disconnect', () => {
-    console.log(`Player disconnected: ${socket.id}`);
+    console.log(`Player disconnected: ${socket.id} (${socket.walletAddress || 'no wallet'})`);
     
     // Was this the waiting player?
     if (waitingPlayer === socket.id) {
