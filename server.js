@@ -71,7 +71,7 @@ app.get('/', (req, res) => {
 let waitingPlayers = [];
 let activeGames = new Map();
 
-// Background selection - background4.png eklendi
+// Background selection
 const backgrounds = ['background.png', 'background2.png', 'background3.png', 'background4.png'];
 
 function getRandomBackground() {
@@ -84,20 +84,20 @@ function getRandomKryptomonImage() {
   return `kryptomon${imageNum}.png`;
 }
 
-// Kryptomon stats calculation
+// Kryptomon stats calculation - dengeli hale getirildi
 function calculateKryptomonStats(tokenId) {
   const tokenNum = parseInt(tokenId) || 0;
   
-  let health = 100 + (tokenNum * 3) % 50;
-  let attack = 15 + (tokenNum * 5) % 20;
-  let defense = 10 + (tokenNum * 7) % 15;
-  let speed = 12 + (tokenNum * 11) % 18;
+  let health = 80 + (tokenNum * 2) % 40;  // 80-120 arası
+  let attack = 12 + (tokenNum * 3) % 16;  // 12-28 arası
+  let defense = 8 + (tokenNum * 2) % 12;  // 8-20 arası
+  let speed = 10 + (tokenNum * 4) % 15;   // 10-25 arası
   
   return {
-    health: Math.min(health, 150),
-    attack: Math.min(attack, 35),
-    defense: Math.min(defense, 25),
-    speed: Math.min(speed, 30)
+    health: Math.min(health, 120),
+    attack: Math.min(attack, 28),
+    defense: Math.min(defense, 20),
+    speed: Math.min(speed, 25)
   };
 }
 
@@ -108,7 +108,8 @@ function getKryptomonData(kryptomonTeam, index = 0) {
       tokenId: '978',
       name: 'Default Kryptomon',
       image: getRandomKryptomonImage(),
-      stats: calculateKryptomonStats('978')
+      stats: calculateKryptomonStats('978'),
+      isDead: false
     };
   }
   
@@ -120,7 +121,8 @@ function getKryptomonData(kryptomonTeam, index = 0) {
       tokenId: '978',
       name: 'Default Kryptomon',
       image: getRandomKryptomonImage(),
-      stats: calculateKryptomonStats('978')
+      stats: calculateKryptomonStats('978'),
+      isDead: false
     };
   }
   
@@ -128,20 +130,23 @@ function getKryptomonData(kryptomonTeam, index = 0) {
     return {
       ...kryptomon.nft,
       image: kryptomon.nft.image || getRandomKryptomonImage(),
-      stats: calculateKryptomonStats(kryptomon.nft.tokenId)
+      stats: calculateKryptomonStats(kryptomon.nft.tokenId),
+      isDead: kryptomon.isDead || false
     };
   } else if (kryptomon.tokenId) {
     return {
       ...kryptomon,
       image: kryptomon.image || getRandomKryptomonImage(),
-      stats: calculateKryptomonStats(kryptomon.tokenId)
+      stats: calculateKryptomonStats(kryptomon.tokenId),
+      isDead: kryptomon.isDead || false
     };
   } else {
     return {
       tokenId: '978',
       name: 'Default Kryptomon',
       image: getRandomKryptomonImage(),
-      stats: calculateKryptomonStats('978')
+      stats: calculateKryptomonStats('978'),
+      isDead: false
     };
   }
 }
@@ -149,9 +154,9 @@ function getKryptomonData(kryptomonTeam, index = 0) {
 function getKryptomonTeamData(kryptomonTeam) {
   if (!kryptomonTeam || !Array.isArray(kryptomonTeam)) {
     return [
-      { tokenId: '978', name: 'Default Kryptomon 1', image: getRandomKryptomonImage(), stats: calculateKryptomonStats('978') },
-      { tokenId: '979', name: 'Default Kryptomon 2', image: getRandomKryptomonImage(), stats: calculateKryptomonStats('979') },
-      { tokenId: '980', name: 'Default Kryptomon 3', image: getRandomKryptomonImage(), stats: calculateKryptomonStats('980') }
+      { tokenId: '978', name: 'Default Kryptomon 1', image: getRandomKryptomonImage(), stats: calculateKryptomonStats('978'), isDead: false },
+      { tokenId: '979', name: 'Default Kryptomon 2', image: getRandomKryptomonImage(), stats: calculateKryptomonStats('979'), isDead: false },
+      { tokenId: '980', name: 'Default Kryptomon 3', image: getRandomKryptomonImage(), stats: calculateKryptomonStats('980'), isDead: false }
     ];
   }
   
@@ -159,14 +164,30 @@ function getKryptomonTeamData(kryptomonTeam) {
     const data = getKryptomonData(kryptomonTeam, index);
     return {
       ...data,
-      image: data.image || getRandomKryptomonImage()
+      image: data.image || getRandomKryptomonImage(),
+      isDead: data.isDead || false
     };
   });
 }
 
-// Critical hit calculation
+// Critical hit calculation - %25'e çıkarıldı
 function calculateCriticalHit() {
-  return Math.random() < 0.2;
+  return Math.random() < 0.25;
+}
+
+// Kryptomon öldüğünde sonraki yaşayanı bul
+function findNextAliveKryptomon(player) {
+  for (let i = 0; i < player.kryptomonTeam.length; i++) {
+    if (!player.kryptomonTeam[i].isDead) {
+      return i;
+    }
+  }
+  return -1; // Hepsi ölü
+}
+
+// Tüm Kryptomon ölü mü kontrol et
+function areAllKryptomonDead(player) {
+  return player.kryptomonTeam.every(k => k.isDead);
 }
 
 // Game logic functions
@@ -251,7 +272,10 @@ function processMove(gameState, playerIndex, move, activeKryptomon, noTurnChange
     shieldEffect: false,
     ultimateEffect: false,
     kryptomonSwitched: false,
-    newActiveKryptomon: null
+    newActiveKryptomon: null,
+    kryptomonDied: false,
+    autoSwitched: false,
+    gameEnded: false
   };
   
   // Start of turn cleanup
@@ -276,6 +300,7 @@ function processMove(gameState, playerIndex, move, activeKryptomon, noTurnChange
       activeKryptomon >= 0 && activeKryptomon < 3 && 
       player.kryptomonTeam && player.kryptomonTeam.length > activeKryptomon &&
       activeKryptomon !== player.activeKryptomon &&
+      !player.kryptomonTeam[activeKryptomon].isDead &&
       !player.hasUsedSwitch) {
     
     player.activeKryptomon = activeKryptomon;
@@ -308,11 +333,12 @@ function processMove(gameState, playerIndex, move, activeKryptomon, noTurnChange
       player.mana = Math.min(player.maxMana, player.mana + 2);
       moveResult.manaGained = 2;
       
-      let attackDamage = Math.max(1, Math.floor(player.attack * 1.4) - (opponent.defenseEffectTurns > 0 ? opponent.defense * 2 : opponent.defense));
+      // Dengeli hasar hesaplaması
+      let attackDamage = Math.max(1, Math.floor(player.attack * 1.2) - (opponent.defenseEffectTurns > 0 ? Math.floor(opponent.defense * 1.5) : Math.floor(opponent.defense * 0.8)));
       
       const attackCritical = calculateCriticalHit();
       if (attackCritical) {
-        attackDamage = Math.floor(attackDamage * 1.8);
+        attackDamage = Math.floor(attackDamage * 1.6);
         moveResult.isCritical = true;
       }
       
@@ -341,11 +367,11 @@ function processMove(gameState, playerIndex, move, activeKryptomon, noTurnChange
     case 'skill':
       if (player.mana >= 2) {
         player.mana -= 2;
-        let skillDamage = Math.max(1, Math.floor(player.attack * 1.5) - (opponent.defenseEffectTurns > 0 ? opponent.defense * 2 : opponent.defense));
+        let skillDamage = Math.max(1, Math.floor(player.attack * 1.4) - (opponent.defenseEffectTurns > 0 ? Math.floor(opponent.defense * 1.5) : Math.floor(opponent.defense * 0.8)));
         
         const skillCritical = calculateCriticalHit();
         if (skillCritical) {
-          skillDamage = Math.floor(skillDamage * 1.8);
+          skillDamage = Math.floor(skillDamage * 1.6);
           moveResult.isCritical = true;
         }
         
@@ -366,11 +392,11 @@ function processMove(gameState, playerIndex, move, activeKryptomon, noTurnChange
     case 'ultimate':
       if (player.mana >= 6) {
         player.mana -= 6;
-        let ultimateDamage = Math.max(1, Math.floor(player.attack * 2.5) - (opponent.defenseEffectTurns > 0 ? opponent.defense * 2 : opponent.defense));
+        let ultimateDamage = Math.max(1, Math.floor(player.attack * 2.0) - (opponent.defenseEffectTurns > 0 ? Math.floor(opponent.defense * 1.5) : Math.floor(opponent.defense * 0.8)));
         
         const ultimateCritical = calculateCriticalHit();
         if (ultimateCritical) {
-          ultimateDamage = Math.floor(ultimateDamage * 1.8);
+          ultimateDamage = Math.floor(ultimateDamage * 1.6);
           moveResult.isCritical = true;
         }
         
@@ -391,6 +417,7 @@ function processMove(gameState, playerIndex, move, activeKryptomon, noTurnChange
       
     case 'surrender':
       gameState.gameActive = false;
+      moveResult.gameEnded = true;
       return 1 - playerIndex;
       
     case 'skip':
@@ -403,10 +430,37 @@ function processMove(gameState, playerIndex, move, activeKryptomon, noTurnChange
       break;
   }
   
-  // Check for game over
+  // Kryptomon öldü mü kontrol et
   if (opponent.health <= 0) {
-    gameState.gameActive = false;
-    return playerIndex;
+    opponent.kryptomonTeam[opponent.activeKryptomon].isDead = true;
+    moveResult.kryptomonDied = true;
+    
+    // Sonraki yaşayan Kryptomon'u bul
+    const nextAliveIndex = findNextAliveKryptomon(opponent);
+    
+    if (nextAliveIndex !== -1) {
+      // Başka yaşayan Kryptomon var, otomatik değiştir
+      opponent.activeKryptomon = nextAliveIndex;
+      const newKryptomonData = opponent.kryptomonTeam[nextAliveIndex];
+      const newStats = newKryptomonData.stats || calculateKryptomonStats(newKryptomonData.tokenId);
+      
+      opponent.health = newStats.health;
+      opponent.maxHealth = newStats.health;
+      opponent.attack = newStats.attack;
+      opponent.defense = newStats.defense;
+      opponent.mana = 0; // Yeni Kryptomon 0 mana ile başlar
+      
+      moveResult.autoSwitched = true;
+      moveResult.newActiveKryptomon = newKryptomonData;
+      
+      console.log(`💀 Kryptomon died! Auto-switching to ${newKryptomonData.name}`);
+    } else {
+      // Tüm Kryptomon ölü, oyun bitti
+      gameState.gameActive = false;
+      moveResult.gameEnded = true;
+      gameState.lastMoveResult = moveResult;
+      return playerIndex;
+    }
   }
   
   // Switch turns
@@ -430,7 +484,8 @@ io.on('connection', (socket) => {
     console.log('🎯 Player looking for match:', {
       id: socket.id,
       name: playerData.playerName,
-      wallet: playerData.walletAddress?.substring(0, 8) + '...'
+      wallet: playerData.walletAddress?.substring(0, 8) + '...',
+      isGuest: playerData.isGuestMode
     });
 
     const player = {
