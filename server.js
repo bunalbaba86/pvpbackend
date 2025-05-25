@@ -248,7 +248,10 @@ function processMove(gameState, playerIndex, move, activeKryptomon, noTurnChange
     attackerIndex: playerIndex,
     targetIndex: 1 - playerIndex,
     moveType: move,
-    shieldEffect: false
+    shieldEffect: false,
+    ultimateEffect: false,
+    kryptomonSwitched: false,
+    newActiveKryptomon: null
   };
   
   // Start of turn cleanup
@@ -278,6 +281,8 @@ function processMove(gameState, playerIndex, move, activeKryptomon, noTurnChange
     player.activeKryptomon = activeKryptomon;
     player.hasUsedSwitch = true;
     moveResult.switchUsed = true;
+    moveResult.kryptomonSwitched = true;
+    moveResult.newActiveKryptomon = player.kryptomonTeam[activeKryptomon];
     
     const newKryptomonData = player.kryptomonTeam[activeKryptomon];
     
@@ -377,6 +382,7 @@ function processMove(gameState, playerIndex, move, activeKryptomon, noTurnChange
         
         opponent.health = Math.max(0, opponent.health - ultimateDamage);
         moveResult.damage = ultimateDamage;
+        moveResult.ultimateEffect = true;
       } else {
         console.log('❌ Not enough mana for ultimate!');
         return null;
