@@ -435,6 +435,8 @@ function processMove(gameState, playerIndex, move, activeKryptomon, noTurnChange
     opponent.kryptomonTeam[opponent.activeKryptomon].isDead = true;
     moveResult.kryptomonDied = true;
     
+    console.log(`💀 Kryptomon ${opponent.kryptomonTeam[opponent.activeKryptomon].name} died!`);
+    
     // Sonraki yaşayan Kryptomon'u bul
     const nextAliveIndex = findNextAliveKryptomon(opponent);
     
@@ -453,12 +455,13 @@ function processMove(gameState, playerIndex, move, activeKryptomon, noTurnChange
       moveResult.autoSwitched = true;
       moveResult.newActiveKryptomon = newKryptomonData;
       
-      console.log(`💀 Kryptomon died! Auto-switching to ${newKryptomonData.name}`);
+      console.log(`🔄 Auto-switching to ${newKryptomonData.name} (index: ${nextAliveIndex})`);
     } else {
       // Tüm Kryptomon ölü, oyun bitti
       gameState.gameActive = false;
       moveResult.gameEnded = true;
       gameState.lastMoveResult = moveResult;
+      console.log(`🏆 All Kryptomon dead! Player ${playerIndex} wins!`);
       return playerIndex;
     }
   }
@@ -490,7 +493,7 @@ io.on('connection', (socket) => {
 
     const player = {
       socketId: socket.id,
-      walletAddress: playerData.walletAddress,
+      walletAddress: playerData.walletAddress || 'guest_' + socket.id,
       playerName: playerData.playerName,
       selectedKryptomon: playerData.selectedKryptomon,
       isGuestMode: playerData.isGuestMode || false
