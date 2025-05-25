@@ -49,7 +49,6 @@ app.get('/', (req, res) => {
   const gamePath = path.join(__dirname, 'game.html');
   const publicGamePath = path.join(__dirname, 'public', 'game.html');
   
-  // Try to find game.html in different locations
   if (fs.existsSync(gamePath)) {
     res.sendFile(gamePath);
   } 
@@ -57,7 +56,6 @@ app.get('/', (req, res) => {
     res.sendFile(publicGamePath);
   } 
   else {
-    // Fallback response
     res.json({
       status: 'Kryptomon Battle Arena Backend',
       message: 'Socket.io server is running',
@@ -72,6 +70,19 @@ app.get('/', (req, res) => {
 // Game state
 let waitingPlayers = [];
 let activeGames = new Map();
+
+// Background selection
+const backgrounds = ['background.png', 'background2.png', 'background3.png'];
+
+function getRandomBackground() {
+  return backgrounds[Math.floor(Math.random() * backgrounds.length)];
+}
+
+// Kryptomon image selection (1-20)
+function getRandomKryptomonImage() {
+  const imageNum = Math.floor(Math.random() * 20) + 1;
+  return `kryptomon${imageNum}.png`;
+}
 
 // Kryptomon stats calculation
 function calculateKryptomonStats(tokenId) {
@@ -96,7 +107,7 @@ function getKryptomonData(kryptomonTeam, index = 0) {
     return {
       tokenId: '978',
       name: 'Default Kryptomon',
-      image: 'https://via.placeholder.com/150?text=Kryptomon',
+      image: getRandomKryptomonImage(),
       stats: calculateKryptomonStats('978')
     };
   }
@@ -108,7 +119,7 @@ function getKryptomonData(kryptomonTeam, index = 0) {
     return fallback?.nft || fallback || {
       tokenId: '978',
       name: 'Default Kryptomon',
-      image: 'https://via.placeholder.com/150?text=Kryptomon',
+      image: getRandomKryptomonImage(),
       stats: calculateKryptomonStats('978')
     };
   }
@@ -116,18 +127,20 @@ function getKryptomonData(kryptomonTeam, index = 0) {
   if (kryptomon.nft) {
     return {
       ...kryptomon.nft,
+      image: kryptomon.nft.image || getRandomKryptomonImage(),
       stats: calculateKryptomonStats(kryptomon.nft.tokenId)
     };
   } else if (kryptomon.tokenId) {
     return {
       ...kryptomon,
+      image: kryptomon.image || getRandomKryptomonImage(),
       stats: calculateKryptomonStats(kryptomon.tokenId)
     };
   } else {
     return {
       tokenId: '978',
       name: 'Default Kryptomon',
-      image: 'https://via.placeholder.com/150?text=Kryptomon',
+      image: getRandomKryptomonImage(),
       stats: calculateKryptomonStats('978')
     };
   }
@@ -136,20 +149,24 @@ function getKryptomonData(kryptomonTeam, index = 0) {
 function getKryptomonTeamData(kryptomonTeam) {
   if (!kryptomonTeam || !Array.isArray(kryptomonTeam)) {
     return [
-      { tokenId: '978', name: 'Default Kryptomon 1', image: 'https://via.placeholder.com/150?text=Kryptomon1', stats: calculateKryptomonStats('978') },
-      { tokenId: '979', name: 'Default Kryptomon 2', image: 'https://via.placeholder.com/150?text=Kryptomon2', stats: calculateKryptomonStats('979') },
-      { tokenId: '980', name: 'Default Kryptomon 3', image: 'https://via.placeholder.com/150?text=Kryptomon3', stats: calculateKryptomonStats('980') }
+      { tokenId: '978', name: 'Default Kryptomon 1', image: getRandomKryptomonImage(), stats: calculateKryptomonStats('978') },
+      { tokenId: '979', name: 'Default Kryptomon 2', image: getRandomKryptomonImage(), stats: calculateKryptomonStats('979') },
+      { tokenId: '980', name: 'Default Kryptomon 3', image: getRandomKryptomonImage(), stats: calculateKryptomonStats('980') }
     ];
   }
   
   return kryptomonTeam.map((kryptomon, index) => {
-    return getKryptomonData(kryptomonTeam, index);
+    const data = getKryptomonData(kryptomonTeam, index);
+    return {
+      ...data,
+      image: data.image || getRandomKryptomonImage()
+    };
   });
 }
 
 // Critical hit calculation
 function calculateCriticalHit() {
-  return Math.random() < 0.2; // 20% critical hit chance
+  return Math.random() < 0.2;
 }
 
 // Game logic functions
@@ -204,17 +221,22 @@ function createGameState(player1, player2) {
     currentTurn: 0,
     gameActive: true,
     turnCount: 1,
-    lastActivity: Date.now()
+    lastActivity: Date.now(),
+    turnTimer: 30,
+    turnStartTime: Date.now(),
+    background: getRandomBackground()
   };
 }
 
 function processMove(gameState, playerIndex, move, activeKryptomon, noTurnChange = false) {
-  console.log('Processing move:', { playerIndex, move, activeKryptomon, noTurnChange });
+  console.log('🎮 Processing move:', { playerIndex, move, activeKryptomon, noTurnChange });
   
   const player = gameState.gameData[playerIndex];
   const opponent = gameState.gameData[1 - playerIndex];
   
   gameState.lastActivity = Date.now();
+  gameState.turnStartTime = Date.now();
+  gameState.turnTimer = 30;
   
   let moveResult = {
     damage: 0,
@@ -224,7 +246,9 @@ function processMove(gameState, playerIndex, move, activeKryptomon, noTurnChange
     target: playerIndex === 0 ? 'enemy' : 'player',
     switchUsed: false,
     attackerIndex: playerIndex,
-    targetIndex: 1 - playerIndex
+    targetIndex: 1 - playerIndex,
+    moveType: move,
+    shieldEffect: false
   };
   
   // Start of turn cleanup
@@ -290,6 +314,7 @@ function processMove(gameState, playerIndex, move, activeKryptomon, noTurnChange
       if (opponent.defenseEffectTurns > 0) {
         opponent.mana = Math.min(opponent.maxMana, opponent.mana + 3);
         moveResult.defenseActivated = true;
+        moveResult.shieldEffect = true;
       }
       
       opponent.health = Math.max(0, opponent.health - attackDamage);
@@ -298,13 +323,14 @@ function processMove(gameState, playerIndex, move, activeKryptomon, noTurnChange
       
     case 'defend':
       if (player.defenseCooldown > 0) {
-        console.log('Defense on cooldown!');
+        console.log('❌ Defense on cooldown!');
         return null;
       }
       
       player.defenseEffectTurns = 2;
       player.defenseCooldown = 4;
       player.health = Math.min(player.maxHealth, player.health + 5);
+      moveResult.shieldEffect = true;
       break;
       
     case 'skill':
@@ -321,10 +347,14 @@ function processMove(gameState, playerIndex, move, activeKryptomon, noTurnChange
         if (opponent.defenseEffectTurns > 0) {
           opponent.mana = Math.min(opponent.maxMana, opponent.mana + 3);
           moveResult.defenseActivated = true;
+          moveResult.shieldEffect = true;
         }
         
         opponent.health = Math.max(0, opponent.health - skillDamage);
         moveResult.damage = skillDamage;
+      } else {
+        console.log('❌ Not enough mana for skill!');
+        return null;
       }
       break;
       
@@ -342,10 +372,14 @@ function processMove(gameState, playerIndex, move, activeKryptomon, noTurnChange
         if (opponent.defenseEffectTurns > 0) {
           opponent.mana = Math.min(opponent.maxMana, opponent.mana + 4);
           moveResult.defenseActivated = true;
+          moveResult.shieldEffect = true;
         }
         
         opponent.health = Math.max(0, opponent.health - ultimateDamage);
         moveResult.damage = ultimateDamage;
+      } else {
+        console.log('❌ Not enough mana for ultimate!');
+        return null;
       }
       break;
       
@@ -354,10 +388,12 @@ function processMove(gameState, playerIndex, move, activeKryptomon, noTurnChange
       return 1 - playerIndex;
       
     case 'skip':
+    case 'timeout':
+      console.log('⏱️ Turn skipped/timeout for player', playerIndex);
       break;
       
     default:
-      console.log('Unknown move:', move);
+      console.log('❓ Unknown move:', move);
       break;
   }
   
@@ -371,6 +407,8 @@ function processMove(gameState, playerIndex, move, activeKryptomon, noTurnChange
   if (!noTurnChange && move !== 'switch') {
     gameState.currentTurn = 1 - gameState.currentTurn;
     gameState.turnCount++;
+    gameState.turnStartTime = Date.now();
+    gameState.turnTimer = 30;
   }
   
   gameState.lastMoveResult = moveResult;
@@ -386,6 +424,46 @@ function findGameBySocket(socketId) {
   }
   return null;
 }
+
+// Turn timer system
+setInterval(() => {
+  for (let [gameId, gameState] of activeGames) {
+    if (!gameState.gameActive) continue;
+    
+    const now = Date.now();
+    const timeElapsed = (now - gameState.turnStartTime) / 1000;
+    const timeRemaining = Math.max(0, 30 - timeElapsed);
+    
+    if (timeRemaining <= 0) {
+      // Time's up! Skip turn
+      console.log(`⏱️ Turn timeout for game ${gameId}, player ${gameState.currentTurn}`);
+      
+      const winner = processMove(gameState, gameState.currentTurn, 'timeout');
+      
+      if (winner !== null) {
+        io.to(gameId).emit('gameEnd', {
+          winner: winner,
+          reason: 'timeout',
+          winnerName: gameState.players[winner].playerName
+        });
+        activeGames.delete(gameId);
+      } else {
+        io.to(gameId).emit('gameUpdate', {
+          gameData: gameState.gameData,
+          currentTurn: gameState.currentTurn,
+          lastMoveResult: gameState.lastMoveResult,
+          turnCount: gameState.turnCount,
+          turnTimer: 30
+        });
+      }
+    } else {
+      // Send timer update
+      io.to(gameId).emit('turnTimer', {
+        timeRemaining: Math.ceil(timeRemaining)
+      });
+    }
+  }
+}, 1000); // Check every second
 
 // Socket.io connection handling
 io.on('connection', (socket) => {
@@ -408,15 +486,14 @@ io.on('connection', (socket) => {
           socketId: socket.id,
           walletAddress: data.walletAddress || 'guest_' + socket.id,
           selectedKryptomon: data.selectedKryptomon || [
-            { tokenId: '978', name: 'Default Kryptomon 1', image: 'https://via.placeholder.com/150?text=Kryptomon1' },
-            { tokenId: '979', name: 'Default Kryptomon 2', image: 'https://via.placeholder.com/150?text=Kryptomon2' },
-            { tokenId: '980', name: 'Default Kryptomon 3', image: 'https://via.placeholder.com/150?text=Kryptomon3' }
+            { tokenId: '978', name: 'Default Kryptomon 1', image: getRandomKryptomonImage() },
+            { tokenId: '979', name: 'Default Kryptomon 2', image: getRandomKryptomonImage() },
+            { tokenId: '980', name: 'Default Kryptomon 3', image: getRandomKryptomonImage() }
           ],
           playerName: data.playerName || 'Anonymous',
           isGuestMode: data.isGuestMode || false
         };
 
-        // Remove existing player from queue if reconnecting
         waitingPlayers = waitingPlayers.filter(p => p.socketId !== socket.id);
         waitingPlayers.push(playerData);
         
@@ -441,37 +518,54 @@ io.on('connection', (socket) => {
             const p1ActiveKryptomon = gameState.gameData[0].kryptomonTeam[0];
             const p2ActiveKryptomon = gameState.gameData[1].kryptomonTeam[0];
             
-            // Send game start data to player 1
-            p1Socket.emit('gameStart', {
-              yourIndex: 0,
-              you: gameState.gameData[0],
-              enemy: gameState.gameData[1],
-              yourTurn: gameState.currentTurn === 0,
-              enemyNFT: p2ActiveKryptomon,
-              yourNFT: p1ActiveKryptomon,
-              enemyKryptomonTeam: gameState.gameData[1].kryptomonTeam,
-              yourKryptomonTeam: gameState.gameData[0].kryptomonTeam,
-              enemyPlayerName: player2.playerName,
-              yourActiveKryptomon: p1ActiveKryptomon,
-              enemyActiveKryptomon: p2ActiveKryptomon
+            // Send game found notification first
+            io.to(gameId).emit('gameFound', {
+              player1Name: player1.playerName,
+              player2Name: player2.playerName,
+              background: gameState.background
             });
             
-            // Send game start data to player 2
-            p2Socket.emit('gameStart', {
-              yourIndex: 1,
-              you: gameState.gameData[1],
-              enemy: gameState.gameData[0],
-              yourTurn: gameState.currentTurn === 1,
-              enemyNFT: p1ActiveKryptomon,
-              yourNFT: p2ActiveKryptomon,
-              enemyKryptomonTeam: gameState.gameData[0].kryptomonTeam,
-              yourKryptomonTeam: gameState.gameData[1].kryptomonTeam,
-              enemyPlayerName: player1.playerName,
-              yourActiveKryptomon: p2ActiveKryptomon,
-              enemyActiveKryptomon: p1ActiveKryptomon
-            });
+            // Start 10-second countdown
+            setTimeout(() => {
+              // Send game start data to player 1
+              p1Socket.emit('gameStart', {
+                yourIndex: 0,
+                you: gameState.gameData[0],
+                enemy: gameState.gameData[1],
+                yourTurn: gameState.currentTurn === 0,
+                enemyNFT: p2ActiveKryptomon,
+                yourNFT: p1ActiveKryptomon,
+                enemyKryptomonTeam: gameState.gameData[1].kryptomonTeam,
+                yourKryptomonTeam: gameState.gameData[0].kryptomonTeam,
+                enemyPlayerName: player2.playerName,
+                yourActiveKryptomon: p1ActiveKryptomon,
+                enemyActiveKryptomon: p2ActiveKryptomon,
+                background: gameState.background,
+                turnCount: gameState.turnCount,
+                turnTimer: gameState.turnTimer
+              });
+              
+              // Send game start data to player 2
+              p2Socket.emit('gameStart', {
+                yourIndex: 1,
+                you: gameState.gameData[1],
+                enemy: gameState.gameData[0],
+                yourTurn: gameState.currentTurn === 1,
+                enemyNFT: p1ActiveKryptomon,
+                yourNFT: p2ActiveKryptomon,
+                enemyKryptomonTeam: gameState.gameData[0].kryptomonTeam,
+                yourKryptomonTeam: gameState.gameData[1].kryptomonTeam,
+                enemyPlayerName: player1.playerName,
+                yourActiveKryptomon: p2ActiveKryptomon,
+                enemyActiveKryptomon: p1ActiveKryptomon,
+                background: gameState.background,
+                turnCount: gameState.turnCount,
+                turnTimer: gameState.turnTimer
+              });
+              
+              console.log(`⚔️ Game started between ${player1.playerName} and ${player2.playerName}`);
+            }, 10000); // 10 second delay
             
-            console.log(`⚔️ Game started between ${player1.playerName} and ${player2.playerName}`);
           }
         } else {
           socket.emit('waitingForOpponent');
@@ -537,7 +631,8 @@ io.on('connection', (socket) => {
           gameData: gameState.gameData,
           currentTurn: gameState.currentTurn,
           lastMoveResult: gameState.lastMoveResult,
-          turnCount: gameState.turnCount
+          turnCount: gameState.turnCount,
+          turnTimer: gameState.turnTimer
         });
         
         console.log(`🔄 Game updated - Turn: ${gameState.currentTurn}, Move: ${data.move}`);
@@ -579,16 +674,15 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Handle connection errors
   socket.on('error', (error) => {
     console.error('🔥 Socket error for', socket.id, ':', error);
   });
 });
 
-// Clean up inactive games every 5 minutes
+// Clean up inactive games
 setInterval(() => {
   const now = Date.now();
-  const timeout = 5 * 60 * 1000; // 5 minutes
+  const timeout = 5 * 60 * 1000;
   let cleanedGames = 0;
   
   for (let [gameId, gameState] of activeGames) {
@@ -602,9 +696,9 @@ setInterval(() => {
   if (cleanedGames > 0) {
     console.log(`🗑️ Cleaned up ${cleanedGames} inactive games`);
   }
-}, 60 * 1000); // Check every minute
+}, 60 * 1000);
 
-// Keep alive ping for Render (prevent sleep)
+// Keep alive ping for Render
 setInterval(() => {
   const stats = {
     activeGames: activeGames.size,
@@ -612,15 +706,12 @@ setInterval(() => {
     timestamp: new Date().toISOString()
   };
   console.log('💓 Keep alive ping -', JSON.stringify(stats));
-}, 14 * 60 * 1000); // Every 14 minutes
+}, 14 * 60 * 1000);
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
   console.log('🛑 SIGTERM received, shutting down gracefully...');
-  
-  // Notify all connected players
   io.emit('serverShutdown', { message: 'Server is restarting, please refresh the page.' });
-  
   server.close(() => {
     console.log('✅ Server closed');
     process.exit(0);
@@ -629,10 +720,7 @@ process.on('SIGTERM', () => {
 
 process.on('SIGINT', () => {
   console.log('🛑 SIGINT received, shutting down gracefully...');
-  
-  // Notify all connected players
   io.emit('serverShutdown', { message: 'Server is shutting down, please refresh the page.' });
-  
   server.close(() => {
     console.log('✅ Server closed');
     process.exit(0);
@@ -648,5 +736,4 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`📊 Initial state - Games: 0, Queue: 0`);
 });
 
-// Export for testing
 module.exports = { app, server, io };
