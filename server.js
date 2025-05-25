@@ -17,6 +17,11 @@ const PORT = process.env.PORT || 3000;
 // Serve static files
 app.use(express.static(path.join(__dirname, 'public')));
 
+// Serve the main game file
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'game.html'));
+});
+
 // Game state
 let waitingPlayers = [];
 let activeGames = new Map();
@@ -44,7 +49,7 @@ function getKryptomonData(kryptomonTeam, index = 0) {
     return {
       tokenId: '978',
       name: 'Default Kryptomon',
-      image: 'kryptomon1.png',
+      image: 'https://via.placeholder.com/150?text=Kryptomon',
       stats: calculateKryptomonStats('978')
     };
   }
@@ -56,7 +61,7 @@ function getKryptomonData(kryptomonTeam, index = 0) {
     return fallback?.nft || fallback || {
       tokenId: '978',
       name: 'Default Kryptomon',
-      image: 'kryptomon1.png',
+      image: 'https://via.placeholder.com/150?text=Kryptomon',
       stats: calculateKryptomonStats('978')
     };
   }
@@ -75,7 +80,7 @@ function getKryptomonData(kryptomonTeam, index = 0) {
     return {
       tokenId: '978',
       name: 'Default Kryptomon',
-      image: 'kryptomon1.png',
+      image: 'https://via.placeholder.com/150?text=Kryptomon',
       stats: calculateKryptomonStats('978')
     };
   }
@@ -350,8 +355,12 @@ io.on('connection', (socket) => {
       if (data.move === 'join') {
         const playerData = {
           socketId: socket.id,
-          walletAddress: data.walletAddress || 'unknown',
-          selectedKryptomon: data.selectedKryptomon || [],
+          walletAddress: data.walletAddress || 'guest_' + socket.id,
+          selectedKryptomon: data.selectedKryptomon || [
+            { tokenId: '978', name: 'Default Kryptomon', image: 'https://via.placeholder.com/150?text=Kryptomon1' },
+            { tokenId: '979', name: 'Default Kryptomon 2', image: 'https://via.placeholder.com/150?text=Kryptomon2' },
+            { tokenId: '980', name: 'Default Kryptomon 3', image: 'https://via.placeholder.com/150?text=Kryptomon3' }
+          ],
           playerName: data.playerName || 'Anonymous',
           isGuestMode: data.isGuestMode || false
         };
@@ -409,133 +418,66 @@ io.on('connection', (socket) => {
               enemyActiveKryptomon: p1ActiveKryptomon
             });
             
-            console.log(`Game started: ${gameId} - ${player1.playerName} vs ${player2.playerName}`);
+            console.log(`Game started between ${player1.playerName} and ${player2.playerName}`);
           }
         } else {
           socket.emit('waitingForOpponent');
         }
-        
-      } else {
-        // Game move
-        const gameId = findGameBySocket(socket.id);
-        if (!gameId) {
-          socket.emit('errorMessage', 'Game not found');
-          return;
-        }
-        
-        const gameState = activeGames.get(gameId);
-        if (!gameState || !gameState.gameActive) {
-          socket.emit('errorMessage', 'Game not active');
-          return;
-        }
-        
-        const playerIndex = gameState.players.findIndex(p => p.socketId === socket.id);
-        if (playerIndex === -1) {
-          socket.emit('errorMessage', 'Player not found in game');
-          return;
-        }
-        
-        // Allow kryptomon switching anytime during your turn, but other moves only on your turn
-        if (gameState.currentTurn !== playerIndex && data.move !== 'switch') {
-          socket.emit('errorMessage', 'Not your turn');
-          return;
-        }
-        
-        // Special handling for switch moves
-        if (data.move === 'switch') {
-          if (gameState.currentTurn !== playerIndex) {
-            socket.emit('errorMessage', 'Can only switch on your turn');
-            return;
-          }
-          
-          if (gameState.gameData[playerIndex].hasUsedSwitch) {
-            socket.emit('errorMessage', 'Already switched this turn');
-            return;
-          }
-        }
-        
-        const winner = processMove(gameState, playerIndex, data.move, data.activeKryptomon, data.noTurnChange);
-        
-        if (winner !== null) {
-          const winnerSocket = io.sockets.sockets.get(gameState.players[winner].socketId);
-          const loserSocket = io.sockets.sockets.get(gameState.players[1 - winner].socketId);
-          
-          if (winnerSocket) {
-            winnerSocket.emit('gameOver', { 
-              winner: 'player',
-              message: 'Victory! You defeated your opponent!'
-            });
-          }
-          
-          if (loserSocket) {
-            loserSocket.emit('gameOver', { 
-              winner: 'opponent',
-              message: 'Defeat! Better luck next time!'
-            });
-          }
-          
-          activeGames.delete(gameId);
-          console.log(`Game ${gameId} ended. Winner: ${gameState.players[winner].playerName}`);
-        } else {
-          const p1Socket = io.sockets.sockets.get(gameState.players[0].socketId);
-          const p2Socket = io.sockets.sockets.get(gameState.players[1].socketId);
-          
-          if (p1Socket && p2Socket) {
-            const p1ActiveKryptomon = gameState.gameData[0].kryptomonTeam[gameState.gameData[0].activeKryptomon];
-            const p2ActiveKryptomon = gameState.gameData[1].kryptomonTeam[gameState.gameData[1].activeKryptomon];
-            
-            p1Socket.emit('moveConfirmed', {
-              you: gameState.gameData[0],
-              enemy: gameState.gameData[1],
-              yourTurn: gameState.currentTurn === 0,
-              moveResult: {
-                ...gameState.lastMoveResult,
-                target: gameState.lastMoveResult.attackerIndex === 0 ? 'enemy' : 'player'
-              },
-              yourActiveKryptomon: p1ActiveKryptomon,
-              enemyActiveKryptomon: p2ActiveKryptomon
-            });
-            
-            p2Socket.emit('moveConfirmed', {
-              you: gameState.gameData[1],
-              enemy: gameState.gameData[0],
-              yourTurn: gameState.currentTurn === 1,
-              moveResult: {
-                ...gameState.lastMoveResult,
-                target: gameState.lastMoveResult.attackerIndex === 1 ? 'enemy' : 'player'
-              },
-              yourActiveKryptomon: p2ActiveKryptomon,
-              enemyActiveKryptomon: p1ActiveKryptomon
-            });
-          }
-        }
+        return;
       }
-    } catch (error) {
-      console.error('Error processing player move:', error);
-      socket.emit('errorMessage', 'Server error occurred');
-    }
-  });
-
-  // Emoji handling
-  socket.on('sendEmoji', (data) => {
-    try {
+      
+      // Handle other moves
       const gameId = findGameBySocket(socket.id);
-      if (!gameId) return;
+      if (!gameId) {
+        console.log('Game not found for socket:', socket.id);
+        return;
+      }
       
       const gameState = activeGames.get(gameId);
-      if (!gameState) return;
-      
-      const playerIndex = gameState.players.findIndex(p => p.socketId === socket.id);
-      if (playerIndex === -1) return;
-      
-      const opponentSocket = io.sockets.sockets.get(gameState.players[1 - playerIndex].socketId);
-      if (opponentSocket) {
-        opponentSocket.emit('emojiReceived', { emoji: data.emoji });
+      if (!gameState || !gameState.gameActive) {
+        console.log('Game not active or not found');
+        return;
       }
       
-      console.log(`Emoji sent from ${gameState.players[playerIndex].playerName}: ${data.emoji}`);
+      const playerIndex = gameState.players.findIndex(p => p.socketId === socket.id);
+      if (playerIndex === -1) {
+        console.log('Player not found in game');
+        return;
+      }
+      
+      if (data.move === 'emoji') {
+        io.to(gameId).emit('emojiReceived', {
+          emoji: data.emoji,
+          sender: playerIndex
+        });
+        return;
+      }
+      
+      if (gameState.currentTurn !== playerIndex && data.move !== 'surrender') {
+        console.log('Not player turn');
+        return;
+      }
+      
+      const winner = processMove(gameState, playerIndex, data.move, data.activeKryptomon, data.noTurnChange);
+      
+      if (winner !== null) {
+        io.to(gameId).emit('gameEnd', {
+          winner: winner,
+          reason: data.move === 'surrender' ? 'surrender' : 'health'
+        });
+        activeGames.delete(gameId);
+      } else {
+        io.to(gameId).emit('gameUpdate', {
+          gameData: gameState.gameData,
+          currentTurn: gameState.currentTurn,
+          lastMoveResult: gameState.lastMoveResult,
+          turnCount: gameState.turnCount
+        });
+      }
+      
     } catch (error) {
-      console.error('Error handling emoji:', error);
+      console.error('Error processing player move:', error);
+      socket.emit('error', { message: 'An error occurred processing your move' });
     }
   });
 
@@ -545,61 +487,37 @@ io.on('connection', (socket) => {
     // Remove from waiting players
     waitingPlayers = waitingPlayers.filter(p => p.socketId !== socket.id);
     
-    // Handle active game disconnection
+    // Handle active games
     const gameId = findGameBySocket(socket.id);
     if (gameId) {
       const gameState = activeGames.get(gameId);
       if (gameState) {
-        const disconnectedPlayerIndex = gameState.players.findIndex(p => p.socketId === socket.id);
-        if (disconnectedPlayerIndex !== -1) {
-          const remainingPlayerIndex = 1 - disconnectedPlayerIndex;
-          const remainingSocket = io.sockets.sockets.get(gameState.players[remainingPlayerIndex].socketId);
-          
+        const remainingPlayer = gameState.players.find(p => p.socketId !== socket.id);
+        if (remainingPlayer) {
+          const remainingSocket = io.sockets.sockets.get(remainingPlayer.socketId);
           if (remainingSocket) {
-            remainingSocket.emit('gameOver', {
-              winner: 'player',
-              message: 'Victory! Your opponent disconnected.'
-            });
+            remainingSocket.emit('opponentDisconnected');
           }
-          
-          activeGames.delete(gameId);
-          console.log(`Game ${gameId} ended due to disconnection`);
         }
+        activeGames.delete(gameId);
       }
     }
   });
 });
 
-// Cleanup inactive games
+// Clean up inactive games every 5 minutes
 setInterval(() => {
   const now = Date.now();
-  const timeout = 10 * 60 * 1000; // 10 minutes
+  const timeout = 5 * 60 * 1000; // 5 minutes
   
   for (let [gameId, gameState] of activeGames) {
     if (now - gameState.lastActivity > timeout) {
-      console.log(`Cleaning up inactive game: ${gameId}`);
+      console.log('Cleaning up inactive game:', gameId);
       activeGames.delete(gameId);
     }
   }
-}, 60000); // Check every minute
+}, 60 * 1000); // Check every minute
 
-// Start server
 server.listen(PORT, () => {
-  console.log(`🎮 Kryptomon Battle Arena Server running on port ${PORT}`);
-  console.log(`🔗 Server URL: http://localhost:${PORT}`);
-});
-
-// Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('SIGTERM received, shutting down gracefully');
-  server.close(() => {
-    console.log('Process terminated');
-  });
-});
-
-process.on('SIGINT', () => {
-  console.log('SIGINT received, shutting down gracefully');
-  server.close(() => {
-    console.log('Process terminated');
-  });
+  console.log(`🎮 Kryptomon Battle Arena server running on port ${PORT}`);
 });
