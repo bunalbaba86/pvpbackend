@@ -464,7 +464,6 @@ io.on('connection', (socket) => {
           yourIndex: 0,
           opponentName: player.playerName,
           opponentWallet: player.walletAddress,
-          gameState: gameState,
           background: gameState.background
         });
       }
@@ -475,7 +474,6 @@ io.on('connection', (socket) => {
         yourIndex: 1,
         opponentName: opponent.playerName,
         opponentWallet: opponent.walletAddress,
-        gameState: gameState,
         background: gameState.background
       });
 
@@ -487,7 +485,26 @@ io.on('connection', (socket) => {
         
         if (countdown < 0) {
           clearInterval(countdownInterval);
-          io.to(gameId).emit('gameStart', gameState);
+          
+          // Send complete game start data
+          io.to(gameId).emit('gameStart', {
+            gameId,
+            yourIndex: 0,
+            opponentName: player.playerName,
+            opponentWallet: player.walletAddress,
+            gameState: gameState,
+            background: gameState.background
+          });
+          
+          io.to(gameId).emit('gameStart', {
+            gameId,
+            yourIndex: 1,
+            opponentName: opponent.playerName,
+            opponentWallet: opponent.walletAddress,
+            gameState: gameState,
+            background: gameState.background
+          });
+          
           console.log('🎮 Game started:', gameId);
         }
       }, 1000);
