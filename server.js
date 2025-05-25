@@ -2,20 +2,39 @@ const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
 const path = require('path');
+const cors = require('cors');
 
 const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
     origin: "*",
-    methods: ["GET", "POST"]
-  }
+    methods: ["GET", "POST"],
+    allowedHeaders: ["*"],
+    credentials: true
+  },
+  allowEIO3: true,
+  transports: ['websocket', 'polling']
 });
 
 const PORT = process.env.PORT || 3000;
 
+// CORS middleware
+app.use(cors({
+  origin: "*",
+  methods: ["GET", "POST"],
+  allowedHeaders: ["*"],
+  credentials: true
+}));
+
 // Serve static files
 app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.json());
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.json({ status: 'OK', timestamp: new Date().toISOString() });
+});
 
 // Serve the main game file
 app.get('/', (req, res) => {
@@ -88,7 +107,11 @@ function getKryptomonData(kryptomonTeam, index = 0) {
 
 function getKryptomonTeamData(kryptomonTeam) {
   if (!kryptomonTeam || !Array.isArray(kryptomonTeam)) {
-    return [];
+    return [
+      { tokenId: '978', name: 'Default Kryptomon 1', image: 'https://via.placeholder.com/150?text=Kryptomon1', stats: calculateKryptomonStats('978') },
+      { tokenId: '979', name: 'Default Kryptomon 2', image: 'https://via.placeholder.com/150?text=Kryptomon2', stats: calculateKryptomonStats('979') },
+      { tokenId: '980', name: 'Default Kryptomon 3', image: 'https://via.placeholder.com/150?text=Kryptomon3', stats: calculateKryptomonStats('980') }
+    ];
   }
   
   return kryptomonTeam.map((kryptomon, index) => {
@@ -357,7 +380,7 @@ io.on('connection', (socket) => {
           socketId: socket.id,
           walletAddress: data.walletAddress || 'guest_' + socket.id,
           selectedKryptomon: data.selectedKryptomon || [
-            { tokenId: '978', name: 'Default Kryptomon', image: 'https://via.placeholder.com/150?text=Kryptomon1' },
+            { tokenId: '978', name: 'Default Kryptomon 1', image: 'https://via.placeholder.com/150?text=Kryptomon1' },
             { tokenId: '979', name: 'Default Kryptomon 2', image: 'https://via.placeholder.com/150?text=Kryptomon2' },
             { tokenId: '980', name: 'Default Kryptomon 3', image: 'https://via.placeholder.com/150?text=Kryptomon3' }
           ],
@@ -518,6 +541,12 @@ setInterval(() => {
   }
 }, 60 * 1000); // Check every minute
 
-server.listen(PORT, () => {
+// Keep alive ping for Render
+setInterval(() => {
+  console.log('Keep alive ping - Active games:', activeGames.size, 'Waiting players:', waitingPlayers.length);
+}, 14 * 60 * 1000); // Every 14 minutes
+
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`🎮 Kryptomon Battle Arena server running on port ${PORT}`);
+  console.log(`🌐 Server URL: https://pvpbackend.onrender.com`);
 });
