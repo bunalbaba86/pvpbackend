@@ -71,8 +71,8 @@ app.get('/', (req, res) => {
 let waitingPlayers = [];
 let activeGames = new Map();
 
-// Background selection
-const backgrounds = ['background.png', 'background2.png', 'background3.png'];
+// Background selection - background4.png eklendi
+const backgrounds = ['background.png', 'background2.png', 'background3.png', 'background4.png'];
 
 function getRandomBackground() {
   return backgrounds[Math.floor(Math.random() * backgrounds.length)];
@@ -486,17 +486,20 @@ io.on('connection', (socket) => {
         if (countdown < 0) {
           clearInterval(countdownInterval);
           
-          // Send complete game start data
-          io.to(gameId).emit('gameStart', {
-            gameId,
-            yourIndex: 0,
-            opponentName: player.playerName,
-            opponentWallet: player.walletAddress,
-            gameState: gameState,
-            background: gameState.background
-          });
+          // Send complete game start data to both players
+          const opponentSocket = io.sockets.sockets.get(opponent.socketId);
+          if (opponentSocket) {
+            opponentSocket.emit('gameStart', {
+              gameId,
+              yourIndex: 0,
+              opponentName: player.playerName,
+              opponentWallet: player.walletAddress,
+              gameState: gameState,
+              background: gameState.background
+            });
+          }
           
-          io.to(gameId).emit('gameStart', {
+          socket.emit('gameStart', {
             gameId,
             yourIndex: 1,
             opponentName: opponent.playerName,
