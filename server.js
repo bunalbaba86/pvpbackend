@@ -3,6 +3,7 @@ const http = require('http');
 const socketIo = require('socket.io');
 const path = require('path');
 const cors = require('cors');
+const fs = require('fs');
 
 const app = express();
 const server = http.createServer(app);
@@ -28,17 +29,44 @@ app.use(cors({
 }));
 
 // Serve static files
+app.use(express.static(path.join(__dirname)));
 app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static('./'));
 app.use(express.json());
 
 // Health check endpoint
 app.get('/health', (req, res) => {
-  res.json({ status: 'OK', timestamp: new Date().toISOString() });
+  res.json({ 
+    status: 'OK', 
+    timestamp: new Date().toISOString(),
+    activeGames: activeGames.size,
+    waitingPlayers: waitingPlayers.length
+  });
 });
 
-// Serve the main game file
+// Main route with fallback logic
 app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'game.html'));
+  const gamePath = path.join(__dirname, 'game.html');
+  const publicGamePath = path.join(__dirname, 'public', 'game.html');
+  
+  // Try to find game.html in different locations
+  if (fs.existsSync(gamePath)) {
+    res.sendFile(gamePath);
+  } 
+  else if (fs.existsSync(publicGamePath)) {
+    res.sendFile(publicGamePath);
+  } 
+  else {
+    // Fallback response
+    res.json({
+      status: 'Kryptomon Battle Arena Backend',
+      message: 'Socket.io server is running',
+      endpoint: 'https://pvpbackend.onrender.com',
+      activeGames: activeGames.size,
+      waitingPlayers: waitingPlayers.length,
+      timestamp: new Date().toISOString()
+    });
+  }
 });
 
 // Game state
@@ -361,11 +389,11 @@ function findGameBySocket(socketId) {
 
 // Socket.io connection handling
 io.on('connection', (socket) => {
-  console.log('Player connected:', socket.id);
+  console.log('🎮 Player connected:', socket.id);
 
   socket.on('playerMove', (data) => {
     try {
-      console.log('Received player move:', {
+      console.log('📨 Received player move:', {
         move: data.move,
         walletAddress: data.walletAddress,
         playerName: data.playerName,
@@ -388,10 +416,11 @@ io.on('connection', (socket) => {
           isGuestMode: data.isGuestMode || false
         };
 
+        // Remove existing player from queue if reconnecting
         waitingPlayers = waitingPlayers.filter(p => p.socketId !== socket.id);
         waitingPlayers.push(playerData);
         
-        console.log(`Player ${socket.id} (${playerData.playerName}) joined queue. Guest: ${playerData.isGuestMode}. Queue length: ${waitingPlayers.length}`);
+        console.log(`🎯 Player ${socket.id} (${playerData.playerName}) joined queue. Guest: ${playerData.isGuestMode}. Queue length: ${waitingPlayers.length}`);
 
         if (waitingPlayers.length >= 2) {
           const player1 = waitingPlayers.shift();
@@ -412,7 +441,7 @@ io.on('connection', (socket) => {
             const p1ActiveKryptomon = gameState.gameData[0].kryptomonTeam[0];
             const p2ActiveKryptomon = gameState.gameData[1].kryptomonTeam[0];
             
-            // Send game start data with player names
+            // Send game start data to player 1
             p1Socket.emit('gameStart', {
               yourIndex: 0,
               you: gameState.gameData[0],
@@ -427,6 +456,7 @@ io.on('connection', (socket) => {
               enemyActiveKryptomon: p2ActiveKryptomon
             });
             
+            // Send game start data to player 2
             p2Socket.emit('gameStart', {
               yourIndex: 1,
               you: gameState.gameData[1],
@@ -441,34 +471,40 @@ io.on('connection', (socket) => {
               enemyActiveKryptomon: p1ActiveKryptomon
             });
             
-            console.log(`Game started between ${player1.playerName} and ${player2.playerName}`);
+            console.log(`⚔️ Game started between ${player1.playerName} and ${player2.playerName}`);
           }
         } else {
           socket.emit('waitingForOpponent');
+          console.log(`⏳ Player ${playerData.playerName} waiting for opponent...`);
         }
         return;
       }
       
-      // Handle other moves
+      // Handle other game moves
       const gameId = findGameBySocket(socket.id);
       if (!gameId) {
-        console.log('Game not found for socket:', socket.id);
+        console.log('❌ Game not found for socket:', socket.id);
+        socket.emit('error', { message: 'Game not found' });
         return;
       }
       
       const gameState = activeGames.get(gameId);
       if (!gameState || !gameState.gameActive) {
-        console.log('Game not active or not found');
+        console.log('❌ Game not active or not found');
+        socket.emit('error', { message: 'Game not active' });
         return;
       }
       
       const playerIndex = gameState.players.findIndex(p => p.socketId === socket.id);
       if (playerIndex === -1) {
-        console.log('Player not found in game');
+        console.log('❌ Player not found in game');
+        socket.emit('error', { message: 'Player not found in game' });
         return;
       }
       
+      // Handle emoji messages
       if (data.move === 'emoji') {
+        console.log(`😊 Emoji sent: ${data.emoji} from player ${playerIndex}`);
         io.to(gameId).emit('emojiReceived', {
           emoji: data.emoji,
           sender: playerIndex
@@ -476,39 +512,53 @@ io.on('connection', (socket) => {
         return;
       }
       
+      // Check if it's player's turn (except for surrender)
       if (gameState.currentTurn !== playerIndex && data.move !== 'surrender') {
-        console.log('Not player turn');
+        console.log(`❌ Not player ${playerIndex}'s turn (current: ${gameState.currentTurn})`);
+        socket.emit('error', { message: 'Not your turn' });
         return;
       }
       
+      // Process the move
       const winner = processMove(gameState, playerIndex, data.move, data.activeKryptomon, data.noTurnChange);
       
       if (winner !== null) {
+        // Game ended
+        console.log(`🏁 Game ended! Winner: ${winner}`);
         io.to(gameId).emit('gameEnd', {
           winner: winner,
-          reason: data.move === 'surrender' ? 'surrender' : 'health'
+          reason: data.move === 'surrender' ? 'surrender' : 'health',
+          winnerName: gameState.players[winner].playerName
         });
         activeGames.delete(gameId);
       } else {
+        // Game continues, send update
         io.to(gameId).emit('gameUpdate', {
           gameData: gameState.gameData,
           currentTurn: gameState.currentTurn,
           lastMoveResult: gameState.lastMoveResult,
           turnCount: gameState.turnCount
         });
+        
+        console.log(`🔄 Game updated - Turn: ${gameState.currentTurn}, Move: ${data.move}`);
       }
       
     } catch (error) {
-      console.error('Error processing player move:', error);
-      socket.emit('error', { message: 'An error occurred processing your move' });
+      console.error('❌ Error processing player move:', error);
+      socket.emit('error', { message: 'An error occurred processing your move: ' + error.message });
     }
   });
 
-  socket.on('disconnect', () => {
-    console.log('Player disconnected:', socket.id);
+  socket.on('disconnect', (reason) => {
+    console.log('👋 Player disconnected:', socket.id, 'Reason:', reason);
     
     // Remove from waiting players
+    const removedFromQueue = waitingPlayers.filter(p => p.socketId === socket.id).length;
     waitingPlayers = waitingPlayers.filter(p => p.socketId !== socket.id);
+    
+    if (removedFromQueue > 0) {
+      console.log(`🚫 Removed ${removedFromQueue} player(s) from queue`);
+    }
     
     // Handle active games
     const gameId = findGameBySocket(socket.id);
@@ -520,11 +570,18 @@ io.on('connection', (socket) => {
           const remainingSocket = io.sockets.sockets.get(remainingPlayer.socketId);
           if (remainingSocket) {
             remainingSocket.emit('opponentDisconnected');
+            console.log(`📡 Notified remaining player ${remainingPlayer.playerName} of disconnect`);
           }
         }
         activeGames.delete(gameId);
+        console.log(`🗑️ Deleted game ${gameId}`);
       }
     }
+  });
+
+  // Handle connection errors
+  socket.on('error', (error) => {
+    console.error('🔥 Socket error for', socket.id, ':', error);
   });
 });
 
@@ -532,21 +589,64 @@ io.on('connection', (socket) => {
 setInterval(() => {
   const now = Date.now();
   const timeout = 5 * 60 * 1000; // 5 minutes
+  let cleanedGames = 0;
   
   for (let [gameId, gameState] of activeGames) {
     if (now - gameState.lastActivity > timeout) {
-      console.log('Cleaning up inactive game:', gameId);
+      console.log('🧹 Cleaning up inactive game:', gameId);
       activeGames.delete(gameId);
+      cleanedGames++;
     }
+  }
+  
+  if (cleanedGames > 0) {
+    console.log(`🗑️ Cleaned up ${cleanedGames} inactive games`);
   }
 }, 60 * 1000); // Check every minute
 
-// Keep alive ping for Render
+// Keep alive ping for Render (prevent sleep)
 setInterval(() => {
-  console.log('Keep alive ping - Active games:', activeGames.size, 'Waiting players:', waitingPlayers.length);
+  const stats = {
+    activeGames: activeGames.size,
+    waitingPlayers: waitingPlayers.length,
+    timestamp: new Date().toISOString()
+  };
+  console.log('💓 Keep alive ping -', JSON.stringify(stats));
 }, 14 * 60 * 1000); // Every 14 minutes
 
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`🎮 Kryptomon Battle Arena server running on port ${PORT}`);
-  console.log(`🌐 Server URL: https://pvpbackend.onrender.com`);
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('🛑 SIGTERM received, shutting down gracefully...');
+  
+  // Notify all connected players
+  io.emit('serverShutdown', { message: 'Server is restarting, please refresh the page.' });
+  
+  server.close(() => {
+    console.log('✅ Server closed');
+    process.exit(0);
+  });
 });
+
+process.on('SIGINT', () => {
+  console.log('🛑 SIGINT received, shutting down gracefully...');
+  
+  // Notify all connected players
+  io.emit('serverShutdown', { message: 'Server is shutting down, please refresh the page.' });
+  
+  server.close(() => {
+    console.log('✅ Server closed');
+    process.exit(0);
+  });
+});
+
+// Start server
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`🎮 Kryptomon Battle Arena server started!`);
+  console.log(`🌐 Server URL: https://pvpbackend.onrender.com`);
+  console.log(`🔌 Port: ${PORT}`);
+  console.log(`⚡ Socket.io ready for connections`);
+  console.log(`📊 Initial state - Games: 0, Queue: 0`);
+});
+
+// Export for testing
+module.exports = { app, server, io };
