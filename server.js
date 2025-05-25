@@ -201,6 +201,9 @@ function createGameState(player1, player2) {
   const p1Team = getKryptomonTeamData(player1.selectedKryptomon);
   const p2Team = getKryptomonTeamData(player2.selectedKryptomon);
   
+  // Speed'e göre başlayan oyuncuyu belirle
+  const startingPlayer = p1Stats.speed >= p2Stats.speed ? 0 : 1;
+  
   return {
     players: [player1, player2],
     gameData: [
@@ -239,7 +242,7 @@ function createGameState(player1, player2) {
         hasUsedSwitch: false
       }
     ],
-    currentTurn: 0,
+    currentTurn: startingPlayer, // Speed'e göre başlayan
     gameActive: true,
     turnCount: 1,
     lastActivity: Date.now(),
@@ -250,7 +253,19 @@ function createGameState(player1, player2) {
 }
 
 function processMove(gameState, playerIndex, move, activeKryptomon, noTurnChange = false) {
-  console.log('🎮 Processing move:', { playerIndex, move, activeKryptomon, noTurnChange });
+  console.log('🎮 Processing move:', { 
+    playerIndex, 
+    move, 
+    activeKryptomon, 
+    currentTurn: gameState.currentTurn,
+    turnCount: gameState.turnCount 
+  });
+  
+  // Sıra kontrolü - DÜZELTME
+  if (gameState.currentTurn !== playerIndex) {
+    console.log('❌ Not player\'s turn! Current turn:', gameState.currentTurn, 'Player:', playerIndex);
+    return null;
+  }
   
   const player = gameState.gameData[playerIndex];
   const opponent = gameState.gameData[1 - playerIndex];
@@ -303,6 +318,8 @@ function processMove(gameState, playerIndex, move, activeKryptomon, noTurnChange
       !player.kryptomonTeam[activeKryptomon].isDead &&
       !player.hasUsedSwitch) {
     
+    console.log(`🔄 Player ${playerIndex} switching to Kryptomon ${activeKryptomon}`);
+    
     player.activeKryptomon = activeKryptomon;
     player.hasUsedSwitch = true;
     moveResult.switchUsed = true;
@@ -319,9 +336,11 @@ function processMove(gameState, playerIndex, move, activeKryptomon, noTurnChange
       player.defense = newStats.defense;
     }
     
+    // Switch turn after switching
     if (!noTurnChange) {
       gameState.currentTurn = 1 - gameState.currentTurn;
       gameState.turnCount++;
+      console.log(`🔄 Turn switched to player ${gameState.currentTurn}`);
     }
     
     gameState.lastMoveResult = moveResult;
@@ -350,6 +369,7 @@ function processMove(gameState, playerIndex, move, activeKryptomon, noTurnChange
       
       opponent.health = Math.max(0, opponent.health - attackDamage);
       moveResult.damage = attackDamage;
+      console.log(`⚔️ Player ${playerIndex} attacked for ${attackDamage} damage${attackCritical ? ' (CRITICAL!)' : ''}`);
       break;
       
     case 'defend':
@@ -362,6 +382,7 @@ function processMove(gameState, playerIndex, move, activeKryptomon, noTurnChange
       player.defenseCooldown = 4;
       player.health = Math.min(player.maxHealth, player.health + 5);
       moveResult.shieldEffect = true;
+      console.log(`🛡️ Player ${playerIndex} defended and healed 5 HP`);
       break;
       
     case 'skill':
@@ -383,6 +404,7 @@ function processMove(gameState, playerIndex, move, activeKryptomon, noTurnChange
         
         opponent.health = Math.max(0, opponent.health - skillDamage);
         moveResult.damage = skillDamage;
+        console.log(`💫 Player ${playerIndex} used skill for ${skillDamage} damage${skillCritical ? ' (CRITICAL!)' : ''}`);
       } else {
         console.log('❌ Not enough mana for skill!');
         return null;
@@ -409,6 +431,7 @@ function processMove(gameState, playerIndex, move, activeKryptomon, noTurnChange
         opponent.health = Math.max(0, opponent.health - ultimateDamage);
         moveResult.damage = ultimateDamage;
         moveResult.ultimateEffect = true;
+        console.log(`💥 Player ${playerIndex} used ultimate for ${ultimateDamage} damage${ultimateCritical ? ' (CRITICAL!)' : ''}`);
       } else {
         console.log('❌ Not enough mana for ultimate!');
         return null;
@@ -418,6 +441,7 @@ function processMove(gameState, playerIndex, move, activeKryptomon, noTurnChange
     case 'surrender':
       gameState.gameActive = false;
       moveResult.gameEnded = true;
+      console.log(`🏳️ Player ${playerIndex} surrendered`);
       return 1 - playerIndex;
       
     case 'skip':
@@ -466,12 +490,13 @@ function processMove(gameState, playerIndex, move, activeKryptomon, noTurnChange
     }
   }
   
-  // Switch turns
+  // Switch turns - DÜZELTME: Turn sistemini düzgün işle
   if (!noTurnChange && move !== 'switch') {
     gameState.currentTurn = 1 - gameState.currentTurn;
     gameState.turnCount++;
     gameState.turnStartTime = Date.now();
     gameState.turnTimer = 30;
+    console.log(`🔄 Turn switched to player ${gameState.currentTurn} (Turn ${gameState.turnCount})`);
   }
   
   gameState.lastMoveResult = moveResult;
@@ -512,6 +537,8 @@ io.on('connection', (socket) => {
       // Create game state
       const gameState = createGameState(opponent, player);
       activeGames.set(gameId, gameState);
+      
+      console.log(`🎮 Game ${gameId} started with turn: ${gameState.currentTurn}`);
       
       // Notify both players about the match
       const opponentSocket = io.sockets.sockets.get(opponent.socketId);
@@ -566,7 +593,7 @@ io.on('connection', (socket) => {
             background: gameState.background
           });
           
-          console.log('🎮 Game started:', gameId);
+          console.log(`🎮 Game started: ${gameId} - Current turn: ${gameState.currentTurn}`);
         }
       }, 1000);
 
@@ -581,7 +608,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Handle player moves
+  // Handle player moves - DÜZELTME
   socket.on('playerMove', (moveData) => {
     console.log('🎯 Player move received:', moveData);
 
@@ -600,20 +627,25 @@ io.on('connection', (socket) => {
 
     if (!gameId || playerIndex === -1) {
       console.log('❌ Game not found for player move');
+      socket.emit('error', { message: 'Game not found' });
       return;
     }
 
     const gameState = activeGames.get(gameId);
     if (!gameState || !gameState.gameActive) {
       console.log('❌ Game not active');
+      socket.emit('error', { message: 'Game not active' });
       return;
     }
 
-    // Check if it's the player's turn
+    // Check if it's the player's turn - DÜZELTME
     if (gameState.currentTurn !== playerIndex) {
-      console.log('❌ Not player\'s turn');
+      console.log(`❌ Not player's turn. Current: ${gameState.currentTurn}, Player: ${playerIndex}`);
+      socket.emit('error', { message: 'Not your turn' });
       return;
     }
+
+    console.log(`✅ Processing move for player ${playerIndex} (Turn ${gameState.turnCount})`);
 
     // Process the move
     const winner = processMove(
@@ -633,6 +665,8 @@ io.on('connection', (socket) => {
       currentTurn: gameState.currentTurn,
       turnCount: gameState.turnCount
     });
+
+    console.log(`📊 Game updated: ${gameId} - Turn: ${gameState.currentTurn}, Count: ${gameState.turnCount}`);
 
     // Check for game end
     if (winner !== null || !gameState.gameActive) {
