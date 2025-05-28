@@ -26,6 +26,11 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
 
+// Game state variables (tanımlanması gerekiyor!)
+const waitingPlayers = [];
+const activeGames = new Map();
+const connectionStats = new Map();
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ 
@@ -36,31 +41,25 @@ app.get('/health', (req, res) => {
   });
 });
 
-// Enhanced Socket.io configuration for global stability
+// TEK Socket.io konfigürasyonu
 const io = socketIo(server, {
   cors: corsOptions,
-  pingTimeout: 120000,        // 2 minutes (increased from 60s)
-  pingInterval: 45000,        // 45 seconds (increased from 25s)
-  transports: ['polling', 'websocket'], // Polling first for stability
+  pingTimeout: 120000,        
+  pingInterval: 45000,        
+  transports: ['polling', 'websocket'],
   allowEIO3: true,
   maxHttpBufferSize: 1e6,
-  connectTimeout: 90000,      // 90 seconds connection timeout
-  upgradeTimeout: 60000,      // 60 seconds upgrade timeout
+  connectTimeout: 90000,      
+  upgradeTimeout: 60000,      
   allowUpgrades: true,
   cookie: false,
-  serveClient: false,
-  allowRequest: (req, callback) => {
-    // Allow all connections but log them
-    console.log('🔗 New connection attempt from:', req.headers.origin || 'unknown');
-    callback(null, true);
-  }
+  serveClient: false
 });
 
 // Telegram Bot integration
 const TelegramBot = require('node-telegram-bot-api');
 const BOT_TOKEN = '8038231934:AAEx0gp2jt61vHlPvt-KiQGwNpI-frnqRAg';
 
-// Start bot with enhanced error handling
 let bot;
 try {
   bot = new TelegramBot(BOT_TOKEN, { polling: true });
@@ -69,7 +68,7 @@ try {
   console.error('❌ Bot initialization failed:', error);
 }
 
-// Bot commands with enhanced error handling
+// Bot commands
 if (bot) {
   bot.onText(/\/start(.*)/, (msg, match) => {
     try {
@@ -105,7 +104,6 @@ Ready to enter the arena?`;
     }
   });
 
-  // Enhanced callback query handler
   bot.on('callback_query', (query) => {
     try {
       const chatId = query.message.chat.id;
@@ -130,7 +128,6 @@ Ready to enter the arena?`;
     }
   });
 
-  // Bot error handling
   bot.on('error', (error) => {
     console.error('❌ Telegram Bot Error:', error);
   });
@@ -140,12 +137,7 @@ Ready to enter the arena?`;
   });
 }
 
-// Enhanced game state management
-const waitingPlayers = [];
-const activeGames = new Map();
-const connectionStats = new Map(); // Track connection quality
-
-// Kryptomon creation with validation
+// Kryptomon creation
 const getRandomKryptomonSprite = () => Math.floor(Math.random() * 20) + 1;
 
 const createKryptomon = (id, nftData = null) => ({
@@ -161,7 +153,7 @@ const createKryptomon = (id, nftData = null) => ({
   name: nftData ? nftData.name : `Kryptomon #${id}`
 });
 
-// Enhanced team generation
+// Team generation
 function generateTeam(selectedNFTs = null) {
   try {
     if (selectedNFTs && Array.isArray(selectedNFTs) && selectedNFTs.length === 3) {
@@ -183,7 +175,7 @@ function generateTeam(selectedNFTs = null) {
   }
 }
 
-// Enhanced battle moves with validation
+// Battle moves
 const moves = {
   attack: { 
     manaCost: 0, 
@@ -213,7 +205,7 @@ const moves = {
   }
 };
 
-// Enhanced damage calculation
+// Damage calculation
 function calculateDamage(baseDamage, critChance = 0.15) {
   try {
     const variance = Math.floor(Math.random() * 11) - 5;
@@ -234,12 +226,11 @@ function calculateDamage(baseDamage, critChance = 0.15) {
   }
 }
 
-// Enhanced move processing with comprehensive validation
+// Enhanced move processing
 function processMove(game, playerIndex, moveType) {
   try {
     // Validate inputs
     if (!game || !game.players || playerIndex < 0 || playerIndex >= game.players.length) {
-      console.log('❌ Invalid game or player index');
       return { success: false, error: 'Invalid game state' };
     }
 
@@ -247,12 +238,10 @@ function processMove(game, playerIndex, moveType) {
     const opponent = game.players[1 - playerIndex];
     
     if (!player || !opponent) {
-      console.log('❌ Player or opponent not found');
       return { success: false, error: 'Player not found' };
     }
 
     if (!player.team || !opponent.team) {
-      console.log('❌ Team data missing');
       return { success: false, error: 'Team data missing' };
     }
 
@@ -261,35 +250,27 @@ function processMove(game, playerIndex, moveType) {
     const move = moves[moveType];
 
     if (!move) {
-      console.log('❌ Invalid move type:', moveType);
       return { success: false, error: 'Invalid move' };
     }
 
     if (!currentKryptomon || !currentKryptomon.isAlive) {
-      console.log('❌ Current Kryptomon is not alive');
       return { success: false, error: 'Kryptomon not available' };
     }
 
     if (!enemyKryptomon) {
-      console.log('❌ Enemy Kryptomon not found');
       return { success: false, error: 'Enemy not found' };
     }
 
-    // Check mana requirements
+    // Check requirements
     if (move.manaCost && currentKryptomon.mana < move.manaCost) {
-      console.log('❌ Insufficient mana:', currentKryptomon.mana, 'required:', move.manaCost);
       return { success: false, error: 'Insufficient mana' };
     }
 
-    // Check ultimate usage
     if (moveType === 'ultimate' && currentKryptomon.ultimateUsed) {
-      console.log('❌ Ultimate already used');
       return { success: false, error: 'Ultimate already used' };
     }
 
-    // Check defend cooldown
     if (moveType === 'defend' && player.defendCooldown > 0) {
-      console.log('❌ Defend on cooldown:', player.defendCooldown);
       return { success: false, error: 'Defend on cooldown' };
     }
 
@@ -327,12 +308,12 @@ function processMove(game, playerIndex, moveType) {
           target: 'enemy'
         };
         
-        // Check if Kryptomon is defeated
+        // Check if defeated
         if (enemyKryptomon.hp <= 0) {
           enemyKryptomon.isAlive = false;
           result.effects.push('kryptomon_defeated');
           
-          // Find next alive Kryptomon
+          // Find next alive
           let nextAlive = -1;
           for (let i = 0; i < opponent.team.length; i++) {
             if (opponent.team[i].isAlive) {
@@ -380,7 +361,7 @@ function processMove(game, playerIndex, moveType) {
   }
 }
 
-// Connection monitoring
+// Connection tracking
 function trackConnection(socket) {
   const connectionId = socket.id;
   connectionStats.set(connectionId, {
@@ -390,7 +371,6 @@ function trackConnection(socket) {
     userAgent: socket.handshake.headers['user-agent'] || 'unknown'
   });
 
-  // Ping monitoring
   socket.on('pong', () => {
     const stats = connectionStats.get(connectionId);
     if (stats) {
@@ -398,23 +378,21 @@ function trackConnection(socket) {
     }
   });
 
-  // Cleanup on disconnect
   socket.on('disconnect', () => {
     connectionStats.delete(connectionId);
   });
 }
 
-// Enhanced Socket.io connection handling
+// Socket.io connection handling
 io.on('connection', (socket) => {
   console.log('🔗 New connection:', socket.id);
   trackConnection(socket);
 
-  // Enhanced join game with validation
+  // Join game
   socket.on('joinGame', (data) => {
     try {
       console.log('🎮 Join game request:', socket.id, data);
       
-      // Validate join data
       if (!data || typeof data !== 'object') {
         socket.emit('error', { message: 'Invalid join data' });
         return;
@@ -431,7 +409,7 @@ io.on('connection', (socket) => {
         defendCooldown: 0
       };
 
-      // Remove from waiting list if already there
+      // Remove from waiting if already there
       const waitingIndex = waitingPlayers.findIndex(p => p.id === socket.id);
       if (waitingIndex !== -1) {
         waitingPlayers.splice(waitingIndex, 1);
@@ -458,19 +436,13 @@ io.on('connection', (socket) => {
 
         activeGames.set(gameId, game);
         
-        // Join socket rooms
+        // Join rooms
         io.sockets.sockets.get(player1.id)?.join(gameId);
         io.sockets.sockets.get(player2.id)?.join(gameId);
 
         console.log('🎯 Game created:', gameId);
         
-        // Start the game
-        io.to(gameId).emit('gameStarted', {
-          gameRoom: game,
-          yourIndex: null // Will be set individually
-        });
-
-        // Send individual player data
+        // Send game start
         io.to(player1.id).emit('gameStarted', {
           gameRoom: game,
           yourIndex: 0
@@ -491,14 +463,10 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Enhanced team switch with comprehensive validation
+  // Team switch
   socket.on('requestTeamSwitch', (data) => {
-    console.log('🔄 Team switch request:', socket.id, data);
-    
     try {
-      // Validate switch data
       if (!data || typeof data !== 'object' || typeof data.kryptomonIndex !== 'number') {
-        console.log('❌ Invalid switch data');
         socket.emit('error', { message: 'Invalid switch data' });
         return;
       }
@@ -517,14 +485,11 @@ io.on('connection', (socket) => {
       }
 
       if (!currentGame || playerIndex === -1) {
-        console.log('❌ Game not found for team switch');
         socket.emit('error', { message: 'Game not found' });
         return;
       }
 
-      // Validate it's player's turn
       if (currentGame.currentTurn !== playerIndex) {
-        console.log('❌ Not player turn for switch');
         socket.emit('error', { message: 'Not your turn' });
         return;
       }
@@ -532,31 +497,27 @@ io.on('connection', (socket) => {
       const player = currentGame.players[playerIndex];
       const targetIndex = data.kryptomonIndex;
 
-      // Comprehensive validation
+      // Validate switch
       if (targetIndex < 0 || targetIndex >= player.team.length) {
-        console.log('❌ Kryptomon index out of range');
         socket.emit('error', { message: 'Invalid Kryptomon selection' });
         return;
       }
 
       if (!player.team[targetIndex].isAlive) {
-        console.log('❌ Cannot switch to defeated kryptomon');
         socket.emit('error', { message: 'Cannot switch to defeated Kryptomon' });
         return;
       }
 
       if (targetIndex === player.currentKryptomon) {
-        console.log('❌ Already using this kryptomon');
         socket.emit('error', { message: 'Already using this Kryptomon' });
         return;
       }
 
-      // Perform the switch
+      // Perform switch
       player.currentKryptomon = targetIndex;
       
       console.log(`✅ Team switched: Player ${playerIndex} to Kryptomon ${targetIndex}`);
       
-      // Send success response
       io.to(currentGame.id).emit('teamSwitched', {
         playerIndex,
         newKryptomonIndex: targetIndex,
@@ -565,16 +526,14 @@ io.on('connection', (socket) => {
       });
 
     } catch (error) {
-      console.error('❌ Error in team switch:', error);
-      socket.emit('error', { message: 'Team switch failed: ' + error.message });
+      console.error('❌ Team switch error:', error);
+      socket.emit('error', { message: 'Team switch failed' });
     }
   });
 
-  // Enhanced battle move processing
+  // Battle move
   socket.on('battleMove', (data) => {
     try {
-      console.log('⚔️ Battle move:', socket.id, data);
-
       if (!data || !data.move) {
         socket.emit('error', { message: 'Invalid move data' });
         return;
@@ -608,7 +567,7 @@ io.on('connection', (socket) => {
         return;
       }
 
-      // Process the move
+      // Process move
       const moveResult = processMove(currentGame, playerIndex, data.move);
       
       if (!moveResult.success) {
@@ -619,7 +578,7 @@ io.on('connection', (socket) => {
       // Switch turns
       currentGame.currentTurn = 1 - currentGame.currentTurn;
       
-      // Handle defend cooldown
+      // Handle cooldowns
       const currentPlayer = currentGame.players[playerIndex];
       if (currentPlayer.defendCooldown > 0) {
         currentPlayer.defendCooldown--;
@@ -628,7 +587,7 @@ io.on('connection', (socket) => {
         currentPlayer.defendTurnsLeft--;
       }
 
-      // Send move result to both players
+      // Send result
       io.to(currentGame.id).emit('moveResult', {
         moveResult,
         gameRoom: currentGame
@@ -642,7 +601,6 @@ io.on('connection', (socket) => {
             gameRoom: currentGame
           });
           
-          // Cleanup game
           activeGames.delete(currentGame.id);
         }, 2000);
       }
@@ -653,25 +611,21 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Enhanced disconnect handling
+  // Disconnect
   socket.on('disconnect', (reason) => {
     console.log('💔 Player disconnected:', socket.id, reason);
     
     try {
-      // Remove from waiting list
+      // Remove from waiting
       const waitingIndex = waitingPlayers.findIndex(p => p.id === socket.id);
       if (waitingIndex !== -1) {
         waitingPlayers.splice(waitingIndex, 1);
-        console.log('👥 Player removed from waiting list');
       }
 
       // Handle active games
       for (const [gameId, game] of activeGames.entries()) {
         const playerIndex = game.players.findIndex(p => p.id === socket.id);
         if (playerIndex !== -1) {
-          console.log('🎮 Player in active game disconnected:', gameId);
-          
-          // Notify opponent
           const opponentIndex = 1 - playerIndex;
           const opponentId = game.players[opponentIndex].id;
           
@@ -682,59 +636,42 @@ io.on('connection', (socket) => {
             });
           }
 
-          // Mark game for cleanup after timeout
+          // Cleanup after timeout
           setTimeout(() => {
             if (activeGames.has(gameId)) {
-              console.log('🧹 Cleaning up abandoned game:', gameId);
               activeGames.delete(gameId);
             }
-          }, 120000); // 2 minutes cleanup delay
+          }, 120000);
           
           break;
         }
       }
     } catch (error) {
-      console.error('❌ Disconnect handling error:', error);
+      console.error('❌ Disconnect error:', error);
     }
   });
 
-  // Ping/Pong for connection quality
+  // Ping/Pong
   socket.on('ping', (timestamp) => {
     socket.emit('pong', timestamp);
-  });
-
-  // Error handling
-  socket.on('error', (error) => {
-    console.error('❌ Socket error:', socket.id, error);
   });
 });
 
 // Server monitoring
 setInterval(() => {
-  console.log(`📊 Server Status: ${activeGames.size} active games, ${waitingPlayers.length} waiting players, ${connectionStats.size} connections`);
-}, 60000); // Log every minute
+  console.log(`📊 Server Status: ${activeGames.size} active games, ${waitingPlayers.length} waiting players`);
+}, 60000);
 
-// Enhanced server startup
+// Server startup
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`🚀 Kryptomon Battle Arena server running on port ${PORT}`);
-  console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`🔗 Socket.io configured for global connections`);
 });
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
   console.log('🛑 SIGTERM received, shutting down gracefully');
   server.close(() => {
-    console.log('✅ Server closed');
-    process.exit(0);
-  });
-});
-
-process.on('SIGINT', () => {
-  console.log('🛑 SIGINT received, shutting down gracefully');
-  server.close(() => {
-    console.log('✅ Server closed');
     process.exit(0);
   });
 });
