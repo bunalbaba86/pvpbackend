@@ -26,7 +26,7 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-// Game state variables (tanımlanması gerekiyor!)
+// Game state variables
 const waitingPlayers = [];
 const activeGames = new Map();
 const connectionStats = new Map();
@@ -37,20 +37,21 @@ app.get('/health', (req, res) => {
     status: 'healthy', 
     timestamp: new Date().toISOString(),
     activeGames: activeGames.size,
-    waitingPlayers: waitingPlayers.length
+    waitingPlayers: waitingPlayers.length,
+    connections: connectionStats.size
   });
 });
 
-// TEK Socket.io konfigürasyonu
+// Enhanced Socket.io configuration
 const io = socketIo(server, {
   cors: corsOptions,
-  pingTimeout: 120000,        
-  pingInterval: 45000,        
+  pingTimeout: 120000,
+  pingInterval: 45000,
   transports: ['polling', 'websocket'],
   allowEIO3: true,
   maxHttpBufferSize: 1e6,
-  connectTimeout: 90000,      
-  upgradeTimeout: 60000,      
+  connectTimeout: 90000,
+  upgradeTimeout: 60000,
   allowUpgrades: true,
   cookie: false,
   serveClient: false
@@ -229,7 +230,6 @@ function calculateDamage(baseDamage, critChance = 0.15) {
 // Enhanced move processing
 function processMove(game, playerIndex, moveType) {
   try {
-    // Validate inputs
     if (!game || !game.players || playerIndex < 0 || playerIndex >= game.players.length) {
       return { success: false, error: 'Invalid game state' };
     }
@@ -308,12 +308,10 @@ function processMove(game, playerIndex, moveType) {
           target: 'enemy'
         };
         
-        // Check if defeated
         if (enemyKryptomon.hp <= 0) {
           enemyKryptomon.isAlive = false;
           result.effects.push('kryptomon_defeated');
           
-          // Find next alive
           let nextAlive = -1;
           for (let i = 0; i < opponent.team.length; i++) {
             if (opponent.team[i].isAlive) {
@@ -388,12 +386,13 @@ io.on('connection', (socket) => {
   console.log('🔗 New connection:', socket.id);
   trackConnection(socket);
 
-  // Join game
+  // ENHANCED Join game with detailed logging
   socket.on('joinGame', (data) => {
     try {
       console.log('🎮 Join game request:', socket.id, data);
       
       if (!data || typeof data !== 'object') {
+        console.log('❌ Invalid join data');
         socket.emit('error', { message: 'Invalid join data' });
         return;
       }
@@ -413,15 +412,18 @@ io.on('connection', (socket) => {
       const waitingIndex = waitingPlayers.findIndex(p => p.id === socket.id);
       if (waitingIndex !== -1) {
         waitingPlayers.splice(waitingIndex, 1);
+        console.log('🔄 Removed existing player from waiting list');
       }
 
       waitingPlayers.push(playerData);
       console.log('👥 Players waiting:', waitingPlayers.length);
+      console.log('👥 Waiting players:', waitingPlayers.map(p => `${p.username}(${p.id.substr(-4)})`));
 
       if (waitingPlayers.length >= 2) {
-        // Create game
         const player1 = waitingPlayers.shift();
         const player2 = waitingPlayers.shift();
+        
+        console.log('🎯 Creating game between:', player1.username, 'vs', player2.username);
         
         const gameId = `game_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
         const game = {
@@ -436,36 +438,68 @@ io.on('connection', (socket) => {
 
         activeGames.set(gameId, game);
         
-        // Join rooms
-        io.sockets.sockets.get(player1.id)?.join(gameId);
-        io.sockets.sockets.get(player2.id)?.join(gameId);
-
-        console.log('🎯 Game created:', gameId);
+        // Join socket rooms
+        const socket1 = io.sockets.sockets.get(player1.id);
+        const socket2 = io.sockets.sockets.get(player2.id);
         
-        // Send game start
-        io.to(player1.id).emit('gameStarted', {
-          gameRoom: game,
-          yourIndex: 0
-        });
+        console.log('🔌 Socket1 exists:', !!socket1);
+        console.log('🔌 Socket2 exists:', !!socket2);
+        
+        if (socket1) {
+          socket1.join(gameId);
+          console.log('✅ Player1 joined room:', gameId);
+        }
+        if (socket2) {
+          socket2.join(gameId);
+          console.log('✅ Player2 joined room:', gameId);
+        }
 
-        io.to(player2.id).emit('gameStarted', {
-          gameRoom: game,
-          yourIndex: 1
+        console.log('🎯 Game created with ID:', gameId);
+        console.log('📊 Active games:', activeGames.size);
+        
+        // Send game start events
+        console.log('📤 Sending gameStarted to player1:', player1.id);
+        if (socket1) {
+          socket1.emit('gameStarted', {
+            gameRoom: game,
+            yourIndex: 0
+          });
+        }
+
+        console.log('📤 Sending gameStarted to player2:', player2.id);
+        if (socket2) {
+          socket2.emit('gameStarted', {
+            gameRoom: game,
+            yourIndex: 1
+          });
+        }
+
+        // Also send to room
+        io.to(gameId).emit('gameInfo', {
+          message: 'Game started!',
+          gameId: gameId,
+          players: [player1.username, player2.username]
         });
 
       } else {
-        socket.emit('waitingForOpponent');
+        console.log('📤 Sending waitingForOpponent to:', socket.id);
+        socket.emit('waitingForOpponent', {
+          message: 'Waiting for opponent...',
+          playersWaiting: waitingPlayers.length
+        });
       }
 
     } catch (error) {
       console.error('❌ Join game error:', error);
-      socket.emit('error', { message: 'Failed to join game' });
+      socket.emit('error', { message: 'Failed to join game: ' + error.message });
     }
   });
 
   // Team switch
   socket.on('requestTeamSwitch', (data) => {
     try {
+      console.log('🔄 Team switch request from:', socket.id, data);
+      
       if (!data || typeof data !== 'object' || typeof data.kryptomonIndex !== 'number') {
         socket.emit('error', { message: 'Invalid switch data' });
         return;
@@ -485,11 +519,13 @@ io.on('connection', (socket) => {
       }
 
       if (!currentGame || playerIndex === -1) {
+        console.log('❌ Game not found for player:', socket.id);
         socket.emit('error', { message: 'Game not found' });
         return;
       }
 
       if (currentGame.currentTurn !== playerIndex) {
+        console.log('❌ Not player turn for switch');
         socket.emit('error', { message: 'Not your turn' });
         return;
       }
@@ -534,6 +570,8 @@ io.on('connection', (socket) => {
   // Battle move
   socket.on('battleMove', (data) => {
     try {
+      console.log('⚔️ Battle move from:', socket.id, data);
+      
       if (!data || !data.move) {
         socket.emit('error', { message: 'Invalid move data' });
         return;
@@ -587,6 +625,8 @@ io.on('connection', (socket) => {
         currentPlayer.defendTurnsLeft--;
       }
 
+      console.log('✅ Move processed successfully');
+
       // Send result
       io.to(currentGame.id).emit('moveResult', {
         moveResult,
@@ -595,6 +635,7 @@ io.on('connection', (socket) => {
 
       // Handle game over
       if (currentGame.gameOver) {
+        console.log('🏁 Game over, winner:', currentGame.winner);
         setTimeout(() => {
           io.to(currentGame.id).emit('gameOver', {
             winner: currentGame.winner,
@@ -602,6 +643,7 @@ io.on('connection', (socket) => {
           });
           
           activeGames.delete(currentGame.id);
+          console.log('🧹 Game cleaned up:', currentGame.id);
         }, 2000);
       }
 
@@ -620,12 +662,15 @@ io.on('connection', (socket) => {
       const waitingIndex = waitingPlayers.findIndex(p => p.id === socket.id);
       if (waitingIndex !== -1) {
         waitingPlayers.splice(waitingIndex, 1);
+        console.log('🧹 Removed from waiting list');
       }
 
       // Handle active games
       for (const [gameId, game] of activeGames.entries()) {
         const playerIndex = game.players.findIndex(p => p.id === socket.id);
         if (playerIndex !== -1) {
+          console.log('🎮 Player in active game disconnected:', gameId);
+          
           const opponentIndex = 1 - playerIndex;
           const opponentId = game.players[opponentIndex].id;
           
@@ -640,6 +685,7 @@ io.on('connection', (socket) => {
           setTimeout(() => {
             if (activeGames.has(gameId)) {
               activeGames.delete(gameId);
+              console.log('🧹 Game cleaned up after disconnect:', gameId);
             }
           }, 120000);
           
@@ -655,23 +701,60 @@ io.on('connection', (socket) => {
   socket.on('ping', (timestamp) => {
     socket.emit('pong', timestamp);
   });
+
+  // Error handling
+  socket.on('error', (error) => {
+    console.error('❌ Socket error:', socket.id, error);
+  });
 });
 
 // Server monitoring
 setInterval(() => {
-  console.log(`📊 Server Status: ${activeGames.size} active games, ${waitingPlayers.length} waiting players`);
+  console.log(`📊 Server Status: ${activeGames.size} active games, ${waitingPlayers.length} waiting players, ${connectionStats.size} connections`);
+  
+  // Log active games
+  if (activeGames.size > 0) {
+    console.log('🎮 Active Games:');
+    for (const [gameId, game] of activeGames.entries()) {
+      console.log(`  - ${gameId}: ${game.players[0].username} vs ${game.players[1].username}`);
+    }
+  }
 }, 60000);
+
+// Cleanup old games
+setInterval(() => {
+  const now = Date.now();
+  const maxAge = 30 * 60 * 1000; // 30 minutes
+  
+  for (const [gameId, game] of activeGames.entries()) {
+    if (now - game.createdAt.getTime() > maxAge) {
+      console.log('🧹 Cleaning up old game:', gameId);
+      activeGames.delete(gameId);
+    }
+  }
+}, 5 * 60 * 1000); // Check every 5 minutes
 
 // Server startup
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`🚀 Kryptomon Battle Arena server running on port ${PORT}`);
+  console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`🔗 Socket.io configured for global connections`);
 });
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
   console.log('🛑 SIGTERM received, shutting down gracefully');
   server.close(() => {
+    console.log('✅ Server closed');
+    process.exit(0);
+  });
+});
+
+process.on('SIGINT', () => {
+  console.log('🛑 SIGINT received, shutting down gracefully');
+  server.close(() => {
+    console.log('✅ Server closed');
     process.exit(0);
   });
 });
