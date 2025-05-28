@@ -498,3 +498,73 @@ server.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`🎮 Kryptomon Battle Arena ready!`);
 });
+
+// Telegram Bot entegrasyonu
+const TelegramBot = require('node-telegram-bot-api');
+const BOT_TOKEN = '8038231934:AAEx0gp2jt61vHlPvt-KiQGwNpI-frnqRAg';
+
+// Bot'u başlat (webhook modunda değil, sadece komutlar için)
+const bot = new TelegramBot(BOT_TOKEN, { polling: false });
+
+// Ana sayfa route'u - Telegram Web App için
+app.get('/', (req, res) => {
+  res.sendFile(__dirname + '/game.html');
+});
+
+// Telegram webhook endpoint (opsiyonel)
+app.post(`/bot${BOT_TOKEN}`, (req, res) => {
+  bot.processUpdate(req.body);
+  res.sendStatus(200);
+});
+
+// Bot komutları
+bot.onText(/\/start/, (msg) => {
+  const chatId = msg.chat.id;
+  const username = msg.from.first_name || msg.from.username || 'Player';
+  
+  const welcomeMessage = `🐾 Welcome to Kryptomon Battle Arena, ${username}!
+
+⚔️ Epic multiplayer battles await you!
+🎯 Defeat 3 enemy Kryptomon to win
+🏆 Climb the leaderboards
+
+Ready to battle?`;
+
+  const keyboard = {
+    reply_markup: {
+      inline_keyboard: [
+        [{ 
+          text: '🎮 Play Game', 
+          web_app: { url: 'https://pvpbackend.onrender.com' } 
+        }],
+        [
+          { text: '📊 Stats', callback_data: 'stats' },
+          { text: '❓ Help', callback_data: 'help' }
+        ]
+      ]
+    }
+  };
+
+  bot.sendMessage(chatId, welcomeMessage, keyboard);
+});
+
+bot.on('callback_query', (query) => {
+  const chatId = query.message.chat.id;
+  const data = query.data;
+  
+  if (data === 'stats') {
+    bot.sendMessage(chatId, '📊 Your Battle Stats:\n🏆 Coming Soon!\n⚔️ Track your victories\n🎯 Climb the leaderboard');
+  } else if (data === 'help') {
+    bot.sendMessage(chatId, `❓ How to Play:
+
+⚔️ **Attack** - Deal damage (+2 MP)
+🛡️ **Defend** - Heal yourself (Free) 
+✨ **Skill** - Strong attack (-2 MP)
+💥 **Ultimate** - Devastating attack (-6 MP)
+
+🎯 Defeat all 3 enemy Kryptomon to win!
+🏆 Each victory increases your rank!`);
+  }
+  
+  bot.answerCallbackQuery(query.id);
+});
