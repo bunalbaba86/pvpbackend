@@ -27,9 +27,12 @@ app.get('/', (req, res) => {
 
 const io = socketIo(server, {
   cors: corsOptions,
-  pingTimeout: 60000,
-  pingInterval: 25000,
-  transports: ['websocket', 'polling']
+  pingTimeout: 120000,
+  pingInterval: 45000,
+  transports: ['websocket', 'polling'],
+  allowEIO3: true,
+  maxHttpBufferSize: 1e6,
+  connectTimeout: 60000  // Yeni ekleme
 });
 
 // Telegram Bot entegrasyonu
