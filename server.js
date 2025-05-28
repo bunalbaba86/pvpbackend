@@ -534,8 +534,8 @@ Ready to battle?`;
     reply_markup: {
       inline_keyboard: [
         [{ 
-          text: '🎮 Play Game', 
-          web_app: { url: 'https://pvpbackend.onrender.com' } 
+          text: '🎮 Play Kryptomon Battle', 
+          web_app: { url: 'https://kryptomonbattlearena.vercel.app' } 
         }],
         [
           { text: '📊 Stats', callback_data: 'stats' },
