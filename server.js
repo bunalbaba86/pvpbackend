@@ -28,36 +28,84 @@ const io = socketIo(server, {
 const waitingPlayers = [];
 const activeGames = new Map();
 
-// Simple Kryptomon data
-const createKryptomon = (id) => ({
+// Kryptomon sprites (1-20)
+const getRandomKryptomonSprite = () => Math.floor(Math.random() * 20) + 1;
+
+// Create Kryptomon with NFT support
+const createKryptomon = (id, nftData = null) => ({
   id,
   hp: 100,
   maxHp: 100,
   mana: 100,
   maxMana: 100,
   isAlive: true,
-  ultimateUsed: false
+  ultimateUsed: false,
+  sprite: nftData ? nftData.kryptomonId : getRandomKryptomonSprite(),
+  tokenId: nftData ? nftData.tokenId : null,
+  name: nftData ? nftData.name : `Kryptomon #${id}`
 });
 
-// Create random team
-function generateTeam() {
+// Create team from NFTs or random
+function generateTeam(selectedNFTs = null) {
+  if (selectedNFTs && selectedNFTs.length === 3) {
+    return selectedNFTs.map((nft, index) => createKryptomon(index + 1, nft));
+  }
+  
   return [
     createKryptomon(1),
-    createKryptomon(2),
+    createKryptomon(2), 
     createKryptomon(3)
   ];
 }
 
-// Battle moves
+// Battle moves with enhanced damage calculations
 const moves = {
-  attack: { manaCost: 10, damage: 25 },
-  defend: { manaCost: 5, heal: 15 },
-  skill: { manaCost: 20, damage: 40 },
-  ultimate: { manaCost: 40, damage: 60 },
-  manaRestore: { manaGain: 25 }
+  attack: { 
+    manaCost: 10, 
+    baseDamage: 25, 
+    critChance: 0.15,
+    soundEffect: 'attack'
+  },
+  defend: { 
+    manaCost: 5, 
+    heal: 15,
+    soundEffect: 'defend'
+  },
+  skill: { 
+    manaCost: 20, 
+    baseDamage: 40, 
+    critChance: 0.25,
+    soundEffect: 'skill'
+  },
+  ultimate: { 
+    manaCost: 40, 
+    baseDamage: 60, 
+    critChance: 0.35,
+    soundEffect: 'ultimate'
+  },
+  manaRestore: { 
+    manaGain: 25,
+    soundEffect: null
+  }
 };
 
-// Process move
+// Calculate damage with critical hit system
+function calculateDamage(baseDamage, critChance = 0.15) {
+  const variance = Math.floor(Math.random() * 11) - 5; // -5 to +5
+  let damage = baseDamage + variance;
+  
+  const isCritical = Math.random() < critChance;
+  if (isCritical) {
+    damage = Math.floor(damage * 1.5); // 1.5x damage for critical
+  }
+  
+  return {
+    damage: Math.max(1, damage),
+    isCritical
+  };
+}
+
+// Process move with enhanced battle system
 function processMove(game, playerIndex, moveType) {
   const player = game.players[playerIndex];
   const opponent = game.players[1 - playerIndex];
@@ -65,7 +113,9 @@ function processMove(game, playerIndex, moveType) {
   const enemyKryptomon = opponent.team[opponent.currentKryptomon];
   const move = moves[moveType];
 
-  if (!move || !currentKryptomon.isAlive) return { success: false };
+  if (!move || !currentKryptomon.isAlive) {
+    return { success: false };
+  }
 
   // Check mana
   if (move.manaCost && currentKryptomon.mana < move.manaCost) {
@@ -77,64 +127,135 @@ function processMove(game, playerIndex, moveType) {
     currentKryptomon.mana = Math.max(0, currentKryptomon.mana - move.manaCost);
   }
 
-  const result = { success: true, moveType, effects: [] };
+  const result = { 
+    success: true, 
+    moveType, 
+    playerIndex,
+    effects: [],
+    soundEffect: move.soundEffect,
+    damageInfo: null
+  };
 
   switch (moveType) {
     case 'attack':
     case 'skill':
     case 'ultimate':
-      const damage = move.damage + Math.floor(Math.random() * 10) - 5;
-      enemyKryptomon.hp = Math.max(0, enemyKryptomon.hp - damage);
+      const damageResult = calculateDamage(move.baseDamage, move.critChance);
+      const actualDamage = damageResult.damage;
       
+      enemyKryptomon.hp = Math.max(0, enemyKryptomon.hp - actualDamage);
+      
+      result.damageInfo = {
+        damage: actualDamage,
+        isCritical: damageResult.isCritical,
+        target: 'enemy'
+      };
+      
+      // Check if Kryptomon is defeated
       if (enemyKryptomon.hp <= 0) {
         enemyKryptomon.isAlive = false;
-        // Switch to next alive Kryptomon
+        result.effects.push('kryptomon_defeated');
+        
+        // Find next alive Kryptomon
+        let nextAlive = -1;
         for (let i = 0; i < opponent.team.length; i++) {
           if (opponent.team[i].isAlive) {
-            opponent.currentKryptomon = i;
+            nextAlive = i;
             break;
           }
         }
-        // Check if all are dead
-        if (!opponent.team.some(k => k.isAlive)) {
+        
+        if (nextAlive !== -1) {
+          opponent.currentKryptomon = nextAlive;
+          result.effects.push('kryptomon_switch');
+        } else {
+          // All Kryptomon defeated
           game.winner = playerIndex;
           game.gameOver = true;
+          result.effects.push('game_over');
         }
       }
       
+      // Mark ultimate as used
       if (moveType === 'ultimate') {
         currentKryptomon.ultimateUsed = true;
       }
       break;
 
     case 'defend':
-      currentKryptomon.hp = Math.min(currentKryptomon.maxHp, currentKryptomon.hp + move.heal);
+      const healAmount = move.heal;
+      const oldHp = currentKryptomon.hp;
+      currentKryptomon.hp = Math.min(currentKryptomon.maxHp, currentKryptomon.hp + healAmount);
+      
+      result.damageInfo = {
+        damage: currentKryptomon.hp - oldHp,
+        isCritical: false,
+        target: 'self',
+        isHeal: true
+      };
       break;
 
     case 'manaRestore':
-      currentKryptomon.mana = Math.min(currentKryptomon.maxMana, currentKryptomon.mana + move.manaGain);
+      const manaGain = move.manaGain;
+      const oldMana = currentKryptomon.mana;
+      currentKryptomon.mana = Math.min(currentKryptomon.maxMana, currentKryptomon.mana + manaGain);
+      
+      result.damageInfo = {
+        damage: currentKryptomon.mana - oldMana,
+        isCritical: false,
+        target: 'self',
+        isMana: true
+      };
       break;
   }
 
   return result;
 }
 
+// Enhanced game timer
+function startGameTimer(gameId) {
+  const game = activeGames.get(gameId);
+  if (!game) return;
+
+  let timeLeft = 30;
+  game.timer = setInterval(() => {
+    timeLeft--;
+    io.to(gameId).emit('timerUpdate', { timeLeft });
+    
+    if (timeLeft <= 0) {
+      clearInterval(game.timer);
+      // Auto skip turn
+      game.currentTurn = 1 - game.currentTurn;
+      io.to(gameId).emit('turnSkipped', { 
+        reason: 'timeout',
+        gameRoom: game 
+      });
+      startGameTimer(gameId); // Start timer for next turn
+    }
+  }, 1000);
+}
+
 io.on('connection', (socket) => {
   console.log(`Player connected: ${socket.id}`);
 
   socket.on('joinGame', (data) => {
-    console.log(`Player ${data.username} joining game`);
+    console.log(`Player ${data.username} joining game`, data);
     
     const player = {
       id: socket.id,
       username: data.username || `Player_${Math.floor(Math.random() * 1000)}`,
-      team: generateTeam(),
-      currentKryptomon: 0
+      team: generateTeam(data.selectedNFTs),
+      currentKryptomon: 0,
+      isGuest: data.isGuest || !data.selectedNFTs,
+      selectedNFTs: data.selectedNFTs || []
     };
 
     // Add to waiting list
     waitingPlayers.push(player);
-    socket.emit('waitingForOpponent');
+    socket.emit('waitingForOpponent', { 
+      player: player.username,
+      isGuest: player.isGuest 
+    });
 
     console.log(`Waiting players: ${waitingPlayers.length}`);
 
@@ -149,7 +270,9 @@ io.on('connection', (socket) => {
         players: [player1, player2],
         currentTurn: 0,
         gameOver: false,
-        winner: null
+        winner: null,
+        timer: null,
+        startTime: Date.now()
       };
 
       activeGames.set(gameId, game);
@@ -183,6 +306,9 @@ io.on('connection', (socket) => {
               gameRoom: game,
               yourIndex: 1
             });
+
+            // Start game timer
+            startGameTimer(gameId);
           }
         }, 1000);
       }
@@ -222,8 +348,14 @@ io.on('connection', (socket) => {
     const result = processMove(currentGame, playerIndex, data.moveType);
 
     if (!result.success) {
-      socket.emit('error', { message: 'Invalid move' });
+      socket.emit('error', { message: 'Invalid move - insufficient mana or invalid action' });
       return;
+    }
+
+    // Clear current timer
+    if (currentGame.timer) {
+      clearInterval(currentGame.timer);
+      currentGame.timer = null;
     }
 
     // Switch turn
@@ -241,10 +373,51 @@ io.on('connection', (socket) => {
     if (currentGame.gameOver) {
       io.to(currentGame.id).emit('gameEnd', {
         winner: currentGame.winner,
-        gameRoom: currentGame
+        gameRoom: currentGame,
+        duration: Date.now() - currentGame.startTime
       });
       
       activeGames.delete(currentGame.id);
+    } else {
+      // Start timer for next turn
+      setTimeout(() => {
+        if (activeGames.has(currentGame.id)) {
+          startGameTimer(currentGame.id);
+        }
+      }, 2000); // 2 second delay for animations
+    }
+  });
+
+  socket.on('requestTeamSwitch', (data) => {
+    // Allow manual team switching (if Kryptomon is alive)
+    let currentGame = null;
+    let playerIndex = -1;
+
+    for (const [gameId, game] of activeGames.entries()) {
+      const index = game.players.findIndex(p => p.id === socket.id);
+      if (index !== -1) {
+        currentGame = game;
+        playerIndex = index;
+        break;
+      }
+    }
+
+    if (!currentGame || playerIndex === -1) return;
+
+    const player = currentGame.players[playerIndex];
+    const targetIndex = data.kryptomonIndex;
+
+    if (targetIndex >= 0 && targetIndex < player.team.length && 
+        player.team[targetIndex].isAlive && 
+        targetIndex !== player.currentKryptomon) {
+      
+      player.currentKryptomon = targetIndex;
+      
+      io.to(currentGame.id).emit('teamSwitched', {
+        playerIndex,
+        newKryptomonIndex: targetIndex,
+        gameRoom: currentGame
+      });
     }
   });
 
@@ -261,10 +434,16 @@ io.on('connection', (socket) => {
     for (const [gameId, game] of activeGames.entries()) {
       const playerIndex = game.players.findIndex(p => p.id === socket.id);
       if (playerIndex !== -1) {
+        // Clear timer
+        if (game.timer) {
+          clearInterval(game.timer);
+        }
+        
         // End game
         socket.to(gameId).emit('gameEnd', {
           winner: 1 - playerIndex,
-          reason: 'opponent_disconnected'
+          reason: 'opponent_disconnected',
+          gameRoom: game
         });
         activeGames.delete(gameId);
         break;
@@ -273,12 +452,41 @@ io.on('connection', (socket) => {
   });
 });
 
-// Health check
+// Health check with enhanced stats
 app.get('/health', (req, res) => {
   res.json({
     status: 'healthy',
     activeGames: activeGames.size,
-    waitingPlayers: waitingPlayers.length
+    waitingPlayers: waitingPlayers.length,
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Game stats endpoint
+app.get('/stats', (req, res) => {
+  const gameStats = [];
+  activeGames.forEach((game, gameId) => {
+    gameStats.push({
+      gameId,
+      players: game.players.map(p => ({
+        username: p.username,
+        isGuest: p.isGuest,
+        currentKryptomon: p.currentKryptomon,
+        aliveKryptomon: p.team.filter(k => k.isAlive).length
+      })),
+      currentTurn: game.currentTurn,
+      gameOver: game.gameOver,
+      duration: Date.now() - game.startTime
+    });
+  });
+
+  res.json({
+    activeGames: gameStats,
+    waitingPlayers: waitingPlayers.map(p => ({
+      username: p.username,
+      isGuest: p.isGuest
+    }))
   });
 });
 
@@ -286,4 +494,6 @@ const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`🎮 Kryptomon Battle Arena ready!`);
+  console.log(`📊 Stats available at: http://localhost:${PORT}/stats`);
+  console.log(`❤️ Health check at: http://localhost:${PORT}/health`);
 });
