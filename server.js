@@ -31,18 +31,20 @@ const activeGames = new Map();
 // Kryptomon sprites (1-20)
 const getRandomKryptomonSprite = () => Math.floor(Math.random() * 20) + 1;
 
-// Create Kryptomon with NFT support
+// Create Kryptomon with NFT support - Updated mana system
 const createKryptomon = (id, nftData = null) => ({
   id,
   hp: 100,
   maxHp: 100,
-  mana: 100,
+  mana: 0,  // Start with 0 mana
   maxMana: 100,
   isAlive: true,
   ultimateUsed: false,
   sprite: nftData ? nftData.kryptomonId : getRandomKryptomonSprite(),
   tokenId: nftData ? nftData.tokenId : null,
-  name: nftData ? nftData.name : `Kryptomon #${id}`
+  name: nftData ? nftData.name : `Kryptomon #${id}`,
+  defendTurnsLeft: 0,
+  defendCooldown: 0
 });
 
 // Create team from NFTs or random
@@ -58,34 +60,33 @@ function generateTeam(selectedNFTs = null) {
   ];
 }
 
-// Battle moves with enhanced damage calculations
+// Updated battle moves
 const moves = {
   attack: { 
-    manaCost: 10, 
+    manaCost: 0,
+    manaGain: 2,  // Attack now gives mana
     baseDamage: 25, 
     critChance: 0.15,
     soundEffect: 'attack'
   },
   defend: { 
-    manaCost: 5, 
+    manaCost: 0,  // Defend is now free
     heal: 15,
+    defendTurns: 2,  // 2 turns of effect
+    cooldown: 4,     // 4 turn cooldown
     soundEffect: 'defend'
   },
   skill: { 
-    manaCost: 20, 
+    manaCost: 2,  // Reduced from 20 to 2
     baseDamage: 40, 
     critChance: 0.25,
     soundEffect: 'skill'
   },
   ultimate: { 
-    manaCost: 40, 
+    manaCost: 6,  // Reduced from 40 to 6
     baseDamage: 60, 
     critChance: 0.35,
     soundEffect: 'ultimate'
-  },
-  manaRestore: { 
-    manaGain: 25,
-    soundEffect: null
   }
 };
 
@@ -105,7 +106,7 @@ function calculateDamage(baseDamage, critChance = 0.15) {
   };
 }
 
-// Process move with enhanced battle system
+// Process move with new mana system
 function processMove(game, playerIndex, moveType) {
   const player = game.players[playerIndex];
   const opponent = game.players[1 - playerIndex];
@@ -122,9 +123,19 @@ function processMove(game, playerIndex, moveType) {
     return { success: false };
   }
 
+  // Check defend cooldown
+  if (moveType === 'defend' && currentKryptomon.defendCooldown > 0) {
+    return { success: false };
+  }
+
   // Use mana
   if (move.manaCost) {
     currentKryptomon.mana = Math.max(0, currentKryptomon.mana - move.manaCost);
+  }
+
+  // Gain mana (for attack)
+  if (move.manaGain) {
+    currentKryptomon.mana = Math.min(currentKryptomon.maxMana, currentKryptomon.mana + move.manaGain);
   }
 
   const result = { 
@@ -141,7 +152,12 @@ function processMove(game, playerIndex, moveType) {
     case 'skill':
     case 'ultimate':
       const damageResult = calculateDamage(move.baseDamage, move.critChance);
-      const actualDamage = damageResult.damage;
+      let actualDamage = damageResult.damage;
+      
+      // Apply defend reduction if enemy is defending
+      if (enemyKryptomon.defendTurnsLeft > 0) {
+        actualDamage = Math.floor(actualDamage * 0.5); // 50% damage reduction
+      }
       
       enemyKryptomon.hp = Math.max(0, enemyKryptomon.hp - actualDamage);
       
@@ -180,12 +196,21 @@ function processMove(game, playerIndex, moveType) {
       if (moveType === 'ultimate') {
         currentKryptomon.ultimateUsed = true;
       }
+      
+      // Show mana gain for attack
+      if (moveType === 'attack' && move.manaGain) {
+        result.manaGain = move.manaGain;
+      }
       break;
 
     case 'defend':
       const healAmount = move.heal;
       const oldHp = currentKryptomon.hp;
       currentKryptomon.hp = Math.min(currentKryptomon.maxHp, currentKryptomon.hp + healAmount);
+      
+      // Set defend status
+      currentKryptomon.defendTurnsLeft = move.defendTurns;
+      currentKryptomon.defendCooldown = move.cooldown;
       
       result.damageInfo = {
         damage: currentKryptomon.hp - oldHp,
@@ -194,22 +219,23 @@ function processMove(game, playerIndex, moveType) {
         isHeal: true
       };
       break;
-
-    case 'manaRestore':
-      const manaGain = move.manaGain;
-      const oldMana = currentKryptomon.mana;
-      currentKryptomon.mana = Math.min(currentKryptomon.maxMana, currentKryptomon.mana + manaGain);
-      
-      result.damageInfo = {
-        damage: currentKryptomon.mana - oldMana,
-        isCritical: false,
-        target: 'self',
-        isMana: true
-      };
-      break;
   }
 
   return result;
+}
+
+// Update turn cooldowns
+function updateCooldowns(game) {
+  game.players.forEach(player => {
+    player.team.forEach(kryptomon => {
+      if (kryptomon.defendCooldown > 0) {
+        kryptomon.defendCooldown--;
+      }
+      if (kryptomon.defendTurnsLeft > 0) {
+        kryptomon.defendTurnsLeft--;
+      }
+    });
+  });
 }
 
 // Enhanced game timer
@@ -225,6 +251,7 @@ function startGameTimer(gameId) {
     if (timeLeft <= 0) {
       clearInterval(game.timer);
       // Auto skip turn
+      updateCooldowns(game);
       game.currentTurn = 1 - game.currentTurn;
       io.to(gameId).emit('turnSkipped', { 
         reason: 'timeout',
@@ -348,7 +375,7 @@ io.on('connection', (socket) => {
     const result = processMove(currentGame, playerIndex, data.moveType);
 
     if (!result.success) {
-      socket.emit('error', { message: 'Invalid move - insufficient mana or invalid action' });
+      socket.emit('error', { message: 'Invalid move - insufficient mana or on cooldown' });
       return;
     }
 
@@ -357,6 +384,9 @@ io.on('connection', (socket) => {
       clearInterval(currentGame.timer);
       currentGame.timer = null;
     }
+
+    // Update cooldowns for all Kryptomon
+    updateCooldowns(currentGame);
 
     // Switch turn
     if (!currentGame.gameOver) {
@@ -463,37 +493,8 @@ app.get('/health', (req, res) => {
   });
 });
 
-// Game stats endpoint
-app.get('/stats', (req, res) => {
-  const gameStats = [];
-  activeGames.forEach((game, gameId) => {
-    gameStats.push({
-      gameId,
-      players: game.players.map(p => ({
-        username: p.username,
-        isGuest: p.isGuest,
-        currentKryptomon: p.currentKryptomon,
-        aliveKryptomon: p.team.filter(k => k.isAlive).length
-      })),
-      currentTurn: game.currentTurn,
-      gameOver: game.gameOver,
-      duration: Date.now() - game.startTime
-    });
-  });
-
-  res.json({
-    activeGames: gameStats,
-    waitingPlayers: waitingPlayers.map(p => ({
-      username: p.username,
-      isGuest: p.isGuest
-    }))
-  });
-});
-
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`🎮 Kryptomon Battle Arena ready!`);
-  console.log(`📊 Stats available at: http://localhost:${PORT}/stats`);
-  console.log(`❤️ Health check at: http://localhost:${PORT}/health`);
 });
