@@ -12,15 +12,11 @@
       "dest": "/server.js"
     },
     {
-      "src": "/api/(.*)",
-      "dest": "/server.js"
-    },
-    {
       "src": "/health",
       "dest": "/server.js"
     },
     {
-      "src": "/stats",
+      "src": "/stats", 
       "dest": "/server.js"
     },
     {
