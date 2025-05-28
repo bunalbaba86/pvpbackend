@@ -22,7 +22,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // Serve game.html from root
 app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'game.html'));
+  res.sendFile(path.join(__dirname, 'index.html'));
 });
 
 const io = socketIo(server, {
@@ -129,7 +129,7 @@ console.log('🤖 Telegram Bot started!');
 
 // Ana sayfa route'u - Telegram Web App için
 app.get('/', (req, res) => {
-  res.sendFile(__dirname + '/game.html');
+  res.sendFile(__dirname + '/index.html');
 });
 
 // Bot komutları
