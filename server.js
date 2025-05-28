@@ -1,463 +1,462 @@
 const express = require('express');
 const http = require('http');
-const socketIO = require('socket.io');
-const path = require('path');
+const socketIo = require('socket.io');
+const cors = require('cors');
 
 const app = express();
 const server = http.createServer(app);
-const io = socketIO(server, {
+
+// ✅ CORS ayarları
+app.use(cors({
+  origin: ["https://kryptomonbattlearena.netlify.app", "http://localhost:3000"],
+  methods: ["GET", "POST"],
+  credentials: true
+}));
+
+const io = socketIo(server, {
   cors: {
-    origin: "*",
-    methods: ["GET", "POST"]
+    origin: ["https://kryptomonbattlearena.netlify.app", "http://localhost:3000"],
+    methods: ["GET", "POST"],
+    credentials: true
   },
   transports: ['websocket', 'polling']
 });
 
-const PORT = process.env.PORT || 3000;
-
-// ✅ DENGELİ OYUN MEKANİKLERİ
+// ✅ OYUN DENGESİ AYARLARI
 const GAME_BALANCE = {
-  BASE_HP: 120, // ✅ ARTIRILMIŞ HP
-  BASE_ATTACK: 25, // ✅ AZALTILMIŞ ATTACK
-  ATTACK_VARIANCE: 10, // ✅ 25-35 DAMAGE ARALIĞI
-  CRITICAL_CHANCE: 15, // ✅ %15 KRİTİK ŞANSI
-  CRITICAL_MULTIPLIER: 1.5, // ✅ 1.5X KRİTİK HASAR
-  MANA_GAIN_ATTACK: 1, // ✅ ATTACK +1 MANA
-  DEFENSE_HEAL: 20,
-  SKILL_COST: 2,
-  ULTIMATE_COST: 6,
+  BASE_HP: 120,           // HP artırıldı
+  ATTACK_DAMAGE_MIN: 20,  // Attack hasar azaltıldı  
+  ATTACK_DAMAGE_MAX: 30,
+  SKILL_DAMAGE_MIN: 35,
+  SKILL_DAMAGE_MAX: 45,
+  ULTIMATE_DAMAGE_MIN: 55,
+  ULTIMATE_DAMAGE_MAX: 75,
+  DEFEND_HEAL: 20,
+  CRITICAL_CHANCE: 0.15,  // %15 kritik şansı
+  CRITICAL_MULTIPLIER: 1.5,
+  MANA_PER_ATTACK: 1,    // ✅ Attack +1 mana
+  MANA_COST_SKILL: 2,
+  MANA_COST_ULTIMATE: 6,
   MAX_MANA: 100
 };
 
-// Static file serving
-app.use(express.static(path.join(__dirname)));
+app.use(express.static('public'));
 
-// Game state
-const gameQueue = [];
-const activeGames = new Map();
-const connectedPlayers = new Map();
+// Oyun durumu
+const gameState = {
+  waitingPlayers: [],
+  activeGames: new Map(),
+  playerSockets: new Map()
+};
 
-// ✅ ENHANCED KRYPTOMON GENERATION
-function generateKryptomon() {
-  const spriteNum = Math.floor(Math.random() * 20) + 1;
-  return {
-    sprite: `kryptomon${spriteNum}.png`,
-    name: `Kryptomon ${spriteNum}`,
-    hp: GAME_BALANCE.BASE_HP,
-    maxHp: GAME_BALANCE.BASE_HP,
-    attack: GAME_BALANCE.BASE_ATTACK + Math.floor(Math.random() * 11), // 25-35
-    defense: 15 + Math.floor(Math.random() * 6), // 15-20
-    speed: 10 + Math.floor(Math.random() * 11) // 10-20
-  };
-}
-
-// ✅ ENHANCED TEAM GENERATION
-function generateTeam() {
-  return [
-    generateKryptomon(),
-    generateKryptomon(),
-    generateKryptomon()
-  ];
-}
+// Kryptomon isimleri
+const kryptomonNames = [
+  'Flameclaw', 'Aquafin', 'Thunderwing', 'Earthshard', 'Frostbite',
+  'Shadowleap', 'Brightscale', 'Windcutter', 'Ironshell', 'Poisonstrike',
+  'Crystalfang', 'Blazetail', 'Tidecrest', 'Stormcaller', 'Rockfist',
+  'Iceguard', 'Darkmist', 'Lightbeam', 'Cyclonewing', 'Steelclaw'
+];
 
 // ✅ KRİTİK VURUŞ HESAPLAMA
-function calculateDamage(attacker, defender, moveType = 'attack') {
-  let baseDamage;
+function calculateCritical() {
+  return Math.random() < GAME_BALANCE.CRITICAL_CHANCE;
+}
+
+// ✅ HASAR HESAPLAMA
+function calculateDamage(moveType, isCritical = false) {
+  let baseDamage = 0;
   
-  switch (moveType) {
+  switch(moveType) {
     case 'attack':
-      baseDamage = GAME_BALANCE.BASE_ATTACK + Math.floor(Math.random() * GAME_BALANCE.ATTACK_VARIANCE);
+      baseDamage = Math.floor(Math.random() * (GAME_BALANCE.ATTACK_DAMAGE_MAX - GAME_BALANCE.ATTACK_DAMAGE_MIN + 1)) + GAME_BALANCE.ATTACK_DAMAGE_MIN;
       break;
     case 'skill':
-      baseDamage = (GAME_BALANCE.BASE_ATTACK + Math.floor(Math.random() * GAME_BALANCE.ATTACK_VARIANCE)) * 1.5;
+      baseDamage = Math.floor(Math.random() * (GAME_BALANCE.SKILL_DAMAGE_MAX - GAME_BALANCE.SKILL_DAMAGE_MIN + 1)) + GAME_BALANCE.SKILL_DAMAGE_MIN;
       break;
     case 'ultimate':
-      baseDamage = (GAME_BALANCE.BASE_ATTACK + Math.floor(Math.random() * GAME_BALANCE.ATTACK_VARIANCE)) * 2.5;
+      baseDamage = Math.floor(Math.random() * (GAME_BALANCE.ULTIMATE_DAMAGE_MAX - GAME_BALANCE.ULTIMATE_DAMAGE_MIN + 1)) + GAME_BALANCE.ULTIMATE_DAMAGE_MIN;
       break;
-    default:
-      baseDamage = GAME_BALANCE.BASE_ATTACK;
+    case 'defend':
+      return GAME_BALANCE.DEFEND_HEAL;
   }
   
-  // ✅ KRİTİK VURUŞ KONTROLÜ
-  const isCritical = Math.random() * 100 < GAME_BALANCE.CRITICAL_CHANCE;
-  if (isCritical) {
-    baseDamage *= GAME_BALANCE.CRITICAL_MULTIPLIER;
+  if (isCritical && moveType !== 'defend') {
+    baseDamage = Math.floor(baseDamage * GAME_BALANCE.CRITICAL_MULTIPLIER);
   }
   
-  // Defense calculation
-  const defense = defender.defense || 15;
-  const finalDamage = Math.max(1, Math.floor(baseDamage - defense * 0.5));
+  return baseDamage;
+}
+
+// Rastgele Kryptomon oluştur
+function createRandomKryptomon(index) {
+  const spriteNum = Math.floor(Math.random() * 20) + 1;
+  return {
+    name: kryptomonNames[Math.floor(Math.random() * kryptomonNames.length)],
+    sprite: `kryptomon${spriteNum}.png`,
+    hp: GAME_BALANCE.BASE_HP,
+    maxHp: GAME_BALANCE.BASE_HP,
+    attack: Math.floor(Math.random() * 20) + 80,
+    defense: Math.floor(Math.random() * 20) + 60,
+    speed: Math.floor(Math.random() * 30) + 70
+  };
+}
+
+// Oyuncu oluştur
+function createPlayer(socket, playerData) {
+  const team = [];
+  for (let i = 0; i < 3; i++) {
+    team.push(createRandomKryptomon(i));
+  }
   
   return {
-    damage: finalDamage,
-    critical: isCritical
+    id: socket.id,
+    name: playerData.playerName || 'Anonymous',
+    telegramUserId: playerData.telegramUserId,
+    profilePhoto: playerData.profilePhoto,
+    team: team,
+    activeKryptomon: 0,
+    mana: 0  // ✅ Oyuncu seviyesinde mana
   };
 }
 
-// ✅ ENHANCED BATTLE MOVE PROCESSING
-function processBattleMove(game, playerIndex, move) {
-  const player = game.players[playerIndex];
-  const opponent = game.players[1 - playerIndex];
-  const activeKryptomon = player.team[player.activeKryptomon];
-  const targetKryptomon = opponent.team[opponent.activeKryptomon];
+// Oyun oluştur
+function createGame(player1Socket, player2Socket, player1Data, player2Data) {
+  const gameId = `game_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   
-  let result = {
-    playerIndex,
-    move,
-    damage: 0,
-    heal: 0,
-    critical: false,
-    playerMana: player.mana // ✅ PLAYER MANA TRACKING
+  const player1 = createPlayer(player1Socket, player1Data);
+  const player2 = createPlayer(player2Socket, player2Data);
+  
+  const game = {
+    id: gameId,
+    players: [player1, player2],
+    currentPlayer: Math.floor(Math.random() * 2),
+    turnCount: 0,
+    gameStartTime: Date.now()
   };
-
-  switch (move) {
-    case 'attack':
-      const attackResult = calculateDamage(activeKryptomon, targetKryptomon, 'attack');
-      result.damage = attackResult.damage;
-      result.critical = attackResult.critical;
-      targetKryptomon.hp = Math.max(0, targetKryptomon.hp - result.damage);
-      
-      // ✅ ATTACK MANA GENERATİON
-      player.mana = Math.min(GAME_BALANCE.MAX_MANA, player.mana + GAME_BALANCE.MANA_GAIN_ATTACK);
-      result.playerMana = player.mana;
-      break;
-
-    case 'defend':
-      result.heal = GAME_BALANCE.DEFENSE_HEAL;
-      activeKryptomon.hp = Math.min(activeKryptomon.maxHp, activeKryptomon.hp + result.heal);
-      break;
-
-    case 'skill':
-      if (player.mana >= GAME_BALANCE.SKILL_COST) {
-        const skillResult = calculateDamage(activeKryptomon, targetKryptomon, 'skill');
-        result.damage = skillResult.damage;
-        result.critical = skillResult.critical;
-        targetKryptomon.hp = Math.max(0, targetKryptomon.hp - result.damage);
-        player.mana -= GAME_BALANCE.SKILL_COST;
-        result.playerMana = player.mana;
-      }
-      break;
-
-    case 'ultimate':
-      if (player.mana >= GAME_BALANCE.ULTIMATE_COST) {
-        const ultimateResult = calculateDamage(activeKryptomon, targetKryptomon, 'ultimate');
-        result.damage = ultimateResult.damage;
-        result.critical = ultimateResult.critical;
-        targetKryptomon.hp = Math.max(0, targetKryptomon.hp - result.damage);
-        player.mana -= GAME_BALANCE.ULTIMATE_COST;
-        result.playerMana = player.mana;
-      }
-      break;
-  }
-
-  // Check if current Kryptomon is defeated
-  if (targetKryptomon.hp <= 0) {
-    autoSwitchKryptomon(opponent);
-  }
-
-  result.gameState = game;
-  return result;
+  
+  gameState.activeGames.set(gameId, game);
+  gameState.playerSockets.set(player1Socket.id, { gameId, playerIndex: 0 });
+  gameState.playerSockets.set(player2Socket.id, { gameId, playerIndex: 1 });
+  
+  return game;
 }
 
-// ✅ AUTO SWITCH TO NEXT ALIVE KRYPTOMON
-function autoSwitchKryptomon(player) {
+// Oyun durumunu kontrol et
+function checkGameEnd(game) {
+  for (let playerIndex = 0; playerIndex < 2; playerIndex++) {
+    const player = game.players[playerIndex];
+    const aliveKryptomon = player.team.filter(k => k.hp > 0);
+    
+    if (aliveKryptomon.length === 0) {
+      return {
+        isGameOver: true,
+        winner: 1 - playerIndex,
+        loser: playerIndex
+      };
+    }
+  }
+  
+  return { isGameOver: false };
+}
+
+// Sıradaki canlı Kryptomons geçiş
+function switchToNextAliveKryptomon(player) {
   for (let i = 0; i < player.team.length; i++) {
-    if (player.team[i].hp > 0 && i !== player.activeKryptomon) {
+    if (player.team[i].hp > 0) {
       player.activeKryptomon = i;
       return true;
     }
   }
-  return false; // No alive Kryptomon found
+  return false;
 }
 
-// ✅ CHECK WIN CONDITION
-function checkWinCondition(game) {
-  for (let i = 0; i < 2; i++) {
-    const player = game.players[i];
-    const aliveKryptomon = player.team.filter(k => k.hp > 0);
-    if (aliveKryptomon.length === 0) {
-      return {
-        gameEnded: true,
-        winner: 1 - i,
-        loser: i
-      };
-    }
-  }
-  return { gameEnded: false };
-}
-
-// ✅ ENHANCED GAME CREATION
-function createGame(player1, player2) {
-  const gameId = `game_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-  
-  const game = {
-    id: gameId,
-    players: [
-      {
-        id: player1.id,
-        name: player1.name,
-        avatar: player1.avatar,
-        team: generateTeam(),
-        activeKryptomon: 0,
-        mana: 0 // ✅ PLAYER-BASED MANA
-      },
-      {
-        id: player2.id,
-        name: player2.name,
-        avatar: player2.avatar,
-        team: generateTeam(),
-        activeKryptomon: 0,
-        mana: 0 // ✅ PLAYER-BASED MANA
-      }
-    ],
-    currentTurn: Math.floor(Math.random() * 2),
-    turnCount: 0,
-    createdAt: Date.now()
-  };
-
-  activeGames.set(gameId, game);
-  return game;
-}
-
-// Socket.IO connection handling
+// Socket bağlantıları
 io.on('connection', (socket) => {
-  console.log(`✅ Player connected: ${socket.id}`);
+  console.log(`✅ Oyuncu bağlandı: ${socket.id}`);
   
-  connectedPlayers.set(socket.id, {
-    id: socket.id,
-    inQueue: false,
-    inGame: false
-  });
-
-  // ✅ BROADCAST PLAYER COUNT
-  io.emit('playersOnline', { count: connectedPlayers.size });
-
-  // ✅ JOIN QUEUE
-  socket.on('joinQueue', (playerData) => {
-    console.log(`🎮 Player ${socket.id} joined queue:`, playerData);
+  // Oyuncu sayısını gönder
+  io.emit('playerCount', io.engine.clientsCount);
+  
+  // Oyun arama
+  socket.on('findGame', (playerData) => {
+    console.log(`🔍 Oyun aranıyor: ${socket.id}`, playerData);
     
-    const player = connectedPlayers.get(socket.id);
-    if (player) {
-      player.name = playerData.name;
-      player.avatar = playerData.avatar;
-      player.telegramUserId = playerData.telegramUserId;
-      player.inQueue = true;
-    }
-
-    gameQueue.push(socket.id);
-    
-    socket.emit('waiting', {
-      playersOnline: connectedPlayers.size,
-      playersInQueue: gameQueue.length
-    });
-
-    // ✅ MATCH PLAYERS
-    if (gameQueue.length >= 2) {
-      const player1Id = gameQueue.shift();
-      const player2Id = gameQueue.shift();
-      
-      const player1Socket = io.sockets.sockets.get(player1Id);
-      const player2Socket = io.sockets.sockets.get(player2Id);
-      
-      if (player1Socket && player2Socket) {
-        const player1 = connectedPlayers.get(player1Id);
-        const player2 = connectedPlayers.get(player2Id);
-        
-        const game = createGame(player1, player2);
-        
-        player1.inQueue = false;
-        player1.inGame = true;
-        player1.gameId = game.id;
-        
-        player2.inQueue = false;
-        player2.inGame = true;
-        player2.gameId = game.id;
-
-        // ✅ START GAME FOR BOTH PLAYERS
-        player1Socket.emit('gameStart', {
-          ...game,
-          yourIndex: 0
-        });
-        
-        player2Socket.emit('gameStart', {
-          ...game,
-          yourIndex: 1
-        });
-
-        // ✅ START FIRST TURN
-        setTimeout(() => {
-          player1Socket.emit('turnStart', { yourTurn: game.currentTurn === 0 });
-          player2Socket.emit('turnStart', { yourTurn: game.currentTurn === 1 });
-        }, 1000);
-      }
-    }
-  });
-
-  // ✅ LEAVE QUEUE
-  socket.on('leaveQueue', () => {
-    const index = gameQueue.indexOf(socket.id);
-    if (index > -1) {
-      gameQueue.splice(index, 1);
-    }
-    
-    const player = connectedPlayers.get(socket.id);
-    if (player) {
-      player.inQueue = false;
-    }
-  });
-
-  // ✅ ENHANCED BATTLE MOVE
-  socket.on('battleMove', (data) => {
-    console.log(`⚔️ Battle move from ${socket.id}:`, data);
-    
-    const player = connectedPlayers.get(socket.id);
-    if (!player || !player.inGame) return;
-
-    const game = activeGames.get(player.gameId);
-    if (!game) return;
-
-    // ✅ VALIDATE TURN
-    if (game.currentTurn !== data.playerIndex) {
-      socket.emit('error', { message: 'Not your turn!' });
+    // Zaten oyunda mı kontrol et
+    if (gameState.playerSockets.has(socket.id)) {
+      socket.emit('error', { message: 'Zaten bir oyundasınız!' });
       return;
     }
-
-    // ✅ PROCESS BATTLE MOVE
-    const result = processBattleMove(game, data.playerIndex, data.move);
     
-    // ✅ BROADCAST MOVE TO BOTH PLAYERS
-    const player1Socket = io.sockets.sockets.get(game.players[0].id);
-    const player2Socket = io.sockets.sockets.get(game.players[1].id);
-    
-    if (player1Socket) player1Socket.emit('battleMove', result);
-    if (player2Socket) player2Socket.emit('battleMove', result);
-
-    // ✅ CHECK WIN CONDITION
-    const winCheck = checkWinCondition(game);
-    if (winCheck.gameEnded) {
-      const gameEndData = {
-        winner: winCheck.winner,
-        loser: winCheck.loser,
-        totalTurns: game.turnCount
-      };
-      
-      if (player1Socket) player1Socket.emit('gameEnd', gameEndData);
-      if (player2Socket) player2Socket.emit('gameEnd', gameEndData);
-      
-      // ✅ CLEANUP GAME
-      activeGames.delete(game.id);
-      connectedPlayers.get(game.players[0].id).inGame = false;
-      connectedPlayers.get(game.players[1].id).inGame = false;
-      
-      return;
-    }
-
-    // ✅ NEXT TURN
-    game.currentTurn = 1 - game.currentTurn;
-    game.turnCount++;
-    
-    setTimeout(() => {
-      if (player1Socket) player1Socket.emit('turnStart', { yourTurn: game.currentTurn === 0 });
-      if (player2Socket) player2Socket.emit('turnStart', { yourTurn: game.currentTurn === 1 });
-    }, 1500);
-  });
-
-  // ✅ ENHANCED KRYPTOMON SWITCHING (NO TURN END)
-  socket.on('switchKryptomon', (data) => {
-    console.log(`🔄 Kryptomon switch from ${socket.id}:`, data);
-    
-    const player = connectedPlayers.get(socket.id);
-    if (!player || !player.inGame) return;
-
-    const game = activeGames.get(player.gameId);
-    if (!game) return;
-
-    const gamePlayer = game.players[data.playerIndex];
-    
-    // ✅ VALIDATE SWITCH
-    if (data.newActiveIndex < 0 || data.newActiveIndex >= gamePlayer.team.length) return;
-    if (gamePlayer.team[data.newActiveIndex].hp <= 0) return;
-    if (gamePlayer.activeKryptomon === data.newActiveIndex) return;
-
-    // ✅ PERFORM SWITCH
-    gamePlayer.activeKryptomon = data.newActiveIndex;
-    
-    // ✅ BROADCAST SWITCH TO BOTH PLAYERS
-    const player1Socket = io.sockets.sockets.get(game.players[0].id);
-    const player2Socket = io.sockets.sockets.get(game.players[1].id);
-    
-    const switchData = {
-      playerIndex: data.playerIndex,
-      newActiveIndex: data.newActiveIndex,
-      gameState: game
+    // Bekleyen oyuncular listesine ekle
+    const waitingPlayer = {
+      socket: socket,
+      data: playerData,
+      timestamp: Date.now()
     };
     
-    if (player1Socket) player1Socket.emit('kryptomonSwitched', switchData);
-    if (player2Socket) player2Socket.emit('kryptomonSwitched', switchData);
-  });
-
-  // ✅ DISCONNECT HANDLING
-  socket.on('disconnect', (reason) => {
-    console.log(`❌ Player disconnected: ${socket.id} (${reason})`);
+    gameState.waitingPlayers.push(waitingPlayer);
     
-    // ✅ REMOVE FROM QUEUE
-    const queueIndex = gameQueue.indexOf(socket.id);
-    if (queueIndex > -1) {
-      gameQueue.splice(queueIndex, 1);
+    // Eşleşme kontrolü
+    if (gameState.waitingPlayers.length >= 2) {
+      const player1 = gameState.waitingPlayers.shift();
+      const player2 = gameState.waitingPlayers.shift();
+      
+      console.log(`🎮 Oyun eşleşmesi: ${player1.socket.id} vs ${player2.socket.id}`);
+      
+      const game = createGame(player1.socket, player2.socket, player1.data, player2.data);
+      
+      // Her iki oyuncuya da oyun bilgisini gönder
+      player1.socket.emit('gameFound', {
+        ...game,
+        yourIndex: 0
+      });
+      
+      player2.socket.emit('gameFound', {
+        ...game,
+        yourIndex: 1
+      });
+      
+      // İlk tur bilgisini gönder
+      player1.socket.emit('turnUpdate', { currentPlayer: game.currentPlayer });
+      player2.socket.emit('turnUpdate', { currentPlayer: game.currentPlayer });
+    }
+  });
+  
+  // Arama iptal
+  socket.on('cancelSearch', () => {
+    gameState.waitingPlayers = gameState.waitingPlayers.filter(p => p.socket.id !== socket.id);
+    console.log(`❌ Arama iptal edildi: ${socket.id}`);
+  });
+  
+  // ✅ SAVAŞ HAMLESİ DÜZELTİLMİŞ
+  socket.on('battleMove', (data) => {
+    const playerInfo = gameState.playerSockets.get(socket.id);
+    if (!playerInfo) {
+      socket.emit('error', { message: 'Oyun bulunamadı!' });
+      return;
     }
     
-    // ✅ HANDLE GAME DISCONNECT
-    const player = connectedPlayers.get(socket.id);
-    if (player && player.inGame && player.gameId) {
-      const game = activeGames.get(player.gameId);
-      if (game) {
-        // Find opponent
-        const opponentId = game.players.find(p => p.id !== socket.id)?.id;
-        if (opponentId) {
-          const opponentSocket = io.sockets.sockets.get(opponentId);
-          if (opponentSocket) {
-            opponentSocket.emit('gameEnd', {
-              winner: game.players.findIndex(p => p.id === opponentId),
-              reason: 'opponent_disconnected',
+    const game = gameState.activeGames.get(playerInfo.gameId);
+    if (!game) {
+      socket.emit('error', { message: 'Oyun verisi bulunamadı!' });
+      return;
+    }
+    
+    // Sıra kontrolü
+    if (game.currentPlayer !== playerInfo.playerIndex) {
+      socket.emit('error', { message: 'Sizin sıranız değil!' });
+      return;
+    }
+    
+    const attacker = game.players[playerInfo.playerIndex];
+    const defender = game.players[1 - playerInfo.playerIndex];
+    const { moveType } = data;
+    
+    // Mana kontrolü
+    if (moveType === 'skill' && attacker.mana < GAME_BALANCE.MANA_COST_SKILL) {
+      socket.emit('error', { message: 'Yetersiz mana!' });
+      return;
+    }
+    
+    if (moveType === 'ultimate' && attacker.mana < GAME_BALANCE.MANA_COST_ULTIMATE) {
+      socket.emit('error', { message: 'Yetersiz mana!' });
+      return;
+    }
+    
+    // ✅ Kritik vuruş hesapla
+    const isCritical = calculateCritical();
+    const damage = calculateDamage(moveType, isCritical);
+    
+    console.log(`⚔️ Hamle: ${moveType}, Hasar: ${damage}, Kritik: ${isCritical}`);
+    
+    let newHP;
+    
+    if (moveType === 'defend') {
+      // Defend: kendi canını artır
+      const activeKryptomon = attacker.team[attacker.activeKryptomon];
+      newHP = Math.min(activeKryptomon.hp + damage, GAME_BALANCE.BASE_HP);
+      activeKryptomon.hp = newHP;
+    } else {
+      // Saldırı: düşman canını azalt
+      const targetKryptomon = defender.team[defender.activeKryptomon];
+      newHP = Math.max(0, targetKryptomon.hp - damage);
+      targetKryptomon.hp = newHP;
+    }
+    
+    // ✅ Mana güncellemesi
+    if (moveType === 'attack') {
+      attacker.mana = Math.min(attacker.mana + GAME_BALANCE.MANA_PER_ATTACK, GAME_BALANCE.MAX_MANA);
+    } else if (moveType === 'skill') {
+      attacker.mana = Math.max(0, attacker.mana - GAME_BALANCE.MANA_COST_SKILL);
+    } else if (moveType === 'ultimate') {
+      attacker.mana = Math.max(0, attacker.mana - GAME_BALANCE.MANA_COST_ULTIMATE);
+    }
+    
+    // Hamle bilgisini her iki oyuncuya gönder
+    const moveData = {
+      attacker: playerInfo.playerIndex,
+      defender: 1 - playerInfo.playerIndex,
+      moveType,
+      damage,
+      isCritical,
+      newHP,
+      attackerMana: attacker.mana,
+      defenderMana: defender.mana
+    };
+    
+    io.to(game.players[0].id).emit('battleMove', moveData);
+    io.to(game.players[1].id).emit('battleMove', moveData);
+    
+    // Kryptomon öldü mü kontrol et
+    if (moveType !== 'defend') {
+      const targetKryptomon = defender.team[defender.activeKryptomon];
+      if (targetKryptomon.hp <= 0) {
+        console.log(`💀 Kryptomon öldü: ${targetKryptomon.name}`);
+        
+        // Otomatik olarak canlı Kryptomon'a geçiş yap
+        if (!switchToNextAliveKryptomon(defender)) {
+          // Oyun bitti
+          const gameResult = checkGameEnd(game);
+          if (gameResult.isGameOver) {
+            console.log(`🏁 Oyun bitti! Kazanan: Player ${gameResult.winner}`);
+            
+            io.to(game.players[0].id).emit('gameOver', {
+              winner: gameResult.winner,
+              loser: gameResult.loser,
               totalTurns: game.turnCount
             });
-          }
-          
-          // ✅ CLEANUP OPPONENT
-          const opponentPlayer = connectedPlayers.get(opponentId);
-          if (opponentPlayer) {
-            opponentPlayer.inGame = false;
-            delete opponentPlayer.gameId;
+            
+            io.to(game.players[1].id).emit('gameOver', {
+              winner: gameResult.winner,
+              loser: gameResult.loser,
+              totalTurns: game.turnCount
+            });
+            
+            // Oyunu temizle
+            gameState.activeGames.delete(playerInfo.gameId);
+            gameState.playerSockets.delete(game.players[0].id);
+            gameState.playerSockets.delete(game.players[1].id);
+            return;
           }
         }
-        
-        activeGames.delete(player.gameId);
       }
     }
     
-    connectedPlayers.delete(socket.id);
+    // Sıra değiştir
+    game.currentPlayer = 1 - game.currentPlayer;
+    game.turnCount++;
     
-    // ✅ BROADCAST UPDATED PLAYER COUNT
-    io.emit('playersOnline', { count: connectedPlayers.size });
+    // Tur güncellemesi gönder
+    io.to(game.players[0].id).emit('turnUpdate', { currentPlayer: game.currentPlayer });
+    io.to(game.players[1].id).emit('turnUpdate', { currentPlayer: game.currentPlayer });
+    
+    console.log(`🔄 Sıra değişti: Player ${game.currentPlayer}`);
+  });
+  
+  // ✅ KRYPTOMON DEĞİŞTİRME DÜZELTİLMİŞ
+  socket.on('switchKryptomon', (data) => {
+    const playerInfo = gameState.playerSockets.get(socket.id);
+    if (!playerInfo) {
+      socket.emit('error', { message: 'Oyun bulunamadı!' });
+      return;
+    }
+    
+    const game = gameState.activeGames.get(playerInfo.gameId);
+    if (!game) {
+      socket.emit('error', { message: 'Oyun verisi bulunamadı!' });
+      return;
+    }
+    
+    // Sıra kontrolü
+    if (game.currentPlayer !== playerInfo.playerIndex) {
+      socket.emit('error', { message: 'Sizin sıranız değil!' });
+      return;
+    }
+    
+    const player = game.players[playerInfo.playerIndex];
+    const { newIndex } = data;
+    
+    // Geçerli index kontrolü
+    if (newIndex < 0 || newIndex >= player.team.length) {
+      socket.emit('error', { message: 'Geçersiz Kryptomon indexi!' });
+      return;
+    }
+    
+    // Aynı Kryptomon kontrolü
+    if (newIndex === player.activeKryptomon) {
+      socket.emit('error', { message: 'Bu Kryptomon zaten aktif!' });
+      return;
+    }
+    
+    // Ölen Kryptomon kontrolü
+    if (player.team[newIndex].hp <= 0) {
+      socket.emit('error', { message: 'Bu Kryptomon yenilmiş!' });
+      return;
+    }
+    
+    const oldIndex = player.activeKryptomon;
+    player.activeKryptomon = newIndex;
+    
+    console.log(`🔄 Kryptomon değiştirildi: Player ${playerInfo.playerIndex}, ${oldIndex} -> ${newIndex}`);
+    
+    // ✅ Switch bilgisini gönder (sırayı bitirmez)
+    const switchData = {
+      playerIndex: playerInfo.playerIndex,
+      newActiveIndex: newIndex,
+      oldActiveIndex: oldIndex
+    };
+    
+    io.to(game.players[0].id).emit('switchKryptomon', switchData);
+    io.to(game.players[1].id).emit('switchKryptomon', switchData);
+    
+    // ✅ SIRAYı DEĞİŞTİRME! Switch sırayı bitirmez.
+  });
+  
+  // Bağlantı koptu
+  socket.on('disconnect', () => {
+    console.log(`❌ Oyuncu ayrıldı: ${socket.id}`);
+    
+    // Bekleyen oyuncular listesinden çıkar
+    gameState.waitingPlayers = gameState.waitingPlayers.filter(p => p.socket.id !== socket.id);
+    
+    // Aktif oyundan çıkar
+    const playerInfo = gameState.playerSockets.get(socket.id);
+    if (playerInfo) {
+      const game = gameState.activeGames.get(playerInfo.gameId);
+      if (game) {
+        // Diğer oyuncuya bildir
+        const otherPlayer = game.players[1 - playerInfo.playerIndex];
+        if (otherPlayer) {
+          io.to(otherPlayer.id).emit('gameOver', {
+            winner: 1 - playerInfo.playerIndex,
+            reason: 'Rakip oyunu terk etti'
+          });
+        }
+        
+        // Oyunu temizle
+        gameState.activeGames.delete(playerInfo.gameId);
+        gameState.playerSockets.delete(game.players[0]?.id);
+        gameState.playerSockets.delete(game.players[1]?.id);
+      }
+    }
+    
+    // Oyuncu sayısını güncelle
+    io.emit('playerCount', io.engine.clientsCount);
   });
 });
 
-// ✅ ROOT ROUTE
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'index.html'));
-});
-
-// ✅ START SERVER
+// Sunucuyu başlat
+const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`🚀 Kryptomon Battle Arena Server running on port ${PORT}`);
-  console.log(`📱 Game URL: http://localhost:${PORT}`);
+  console.log(`🚀 Sunucu başlatıldı: Port ${PORT}`);
+  console.log(`📊 Oyun Dengesi: HP=${GAME_BALANCE.BASE_HP}, Attack=${GAME_BALANCE.ATTACK_DAMAGE_MIN}-${GAME_BALANCE.ATTACK_DAMAGE_MAX}`);
 });
 
-// ✅ ENHANCED ERROR HANDLING
-process.on('uncaughtException', (error) => {
-  console.error('❌ Uncaught Exception:', error);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('🛑 Sunucu kapatılıyor...');
+  server.close(() => {
+    console.log('✅ Sunucu kapatıldı');
+    process.exit(0);
+  });
 });
